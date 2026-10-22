@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@theme {
+  /* Override the default sans-serif font stack */
+  --font-sans: 'Poppins', sans-serif;
+
+  /* Or add a completely custom brand font utility (`font-display`) */
+  --font-display: 'Oswald', sans-serif;
+}
