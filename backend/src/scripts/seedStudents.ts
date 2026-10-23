@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { parseClassListCsv } from "../utils/csv";
-import { upsertStudents, isUsingLocalFallback } from "../db/repository";
+import { upsertStudents } from "../db/repository";
 
 async function main() {
   const candidatePaths = [
@@ -28,7 +28,7 @@ async function main() {
   console.log(`   Total Students : ${stats.total}`);
   console.log(`   Boys (M)       : ${stats.boys}`);
   console.log(`   Girls (F)      : ${stats.girls}`);
-  console.log(`   Storage Mode   : ${isUsingLocalFallback() ? "Local Persistent Fallback (.data/local-db.json)" : "Supabase Postgres"}`);
+  console.log(`   Storage Mode   : Supabase Postgres`);
 }
 
 main().catch((err) => {

@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { AdminRole, isUsingLocalFallback, upsertAdminFromCli } from "../db/repository";
+import { AdminRole, upsertAdminFromCli } from "../db/repository";
 
 function parseArgs(argv: string[]): { email?: string; password?: string; role: AdminRole } {
   let email: string | undefined;
@@ -68,9 +68,7 @@ async function main() {
   console.log(`   ID      : ${admin.id}`);
   console.log(`   Email   : ${admin.email}`);
   console.log(`   Role    : ${admin.role}`);
-  console.log(
-    `   Storage : ${isUsingLocalFallback() ? "Local Persistent Fallback (.data/local-db.json)" : "Supabase Postgres"}`
-  );
+  console.log(`   Storage : Supabase Postgres`);
 }
 
 main().catch((err) => {

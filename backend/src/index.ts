@@ -8,7 +8,7 @@ import { config } from "./config";
 import { publicRouter } from "./routes/public";
 import { adminRouter } from "./routes/admin";
 import { errorHandler, AppError } from "./middleware/errorHandler";
-import { getClassStats, isUsingLocalFallback, upsertStudents } from "./db/repository";
+import { getClassStats, upsertStudents } from "./db/repository";
 import { parseClassListCsv } from "./utils/csv";
 
 const app = express();
@@ -65,7 +65,7 @@ app.get("/health", async (_req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    databaseMode: isUsingLocalFallback() ? "local_fallback" : "supabase",
+    databaseMode: "supabase",
     classStats,
   });
 });

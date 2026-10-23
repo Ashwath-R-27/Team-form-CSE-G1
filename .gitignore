@@ -52,6 +52,9 @@ tmp/
 temp/
 uploads/
 .data/
+local-db.json
+backend/local-db.json
+**/local-db.json
 
 # Supabase local files
 supabase/.branches/
