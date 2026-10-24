@@ -247,7 +247,10 @@ export default function TeamRegistrationForm({
       if (!currentField || currentField.value.trim().toUpperCase() !== raw) return;
       updateMemberByUid(uid, {
         status: "invalid",
-        error: "Could not verify roll number. Please try again.",
+        error:
+          err instanceof ApiClientError
+            ? err.message
+            : "Could not verify roll number. Please try again.",
       });
     }
   }
@@ -379,7 +382,9 @@ export default function TeamRegistrationForm({
     } catch (err: any) {
       if (err?.name === "AbortError") return;
       setFreeTopicStatus("invalid");
-      setTopicError("Could not verify topic availability.");
+      setTopicError(
+        err instanceof ApiClientError ? err.message : "Could not verify topic availability."
+      );
     }
   }
 

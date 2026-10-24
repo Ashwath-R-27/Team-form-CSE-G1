@@ -115,26 +115,51 @@ export const supabase: SupabaseClient = createClient(
 
 function handleSupabaseError(error: any): never {
   const rawMsg: string = error?.message || "Database operation failed";
+  console.error("[Database Error]", {
+    code: error?.code,
+    message: rawMsg,
+    details: error?.details,
+    hint: error?.hint,
+  });
+
   if (rawMsg.includes("row-level security policy") || error?.code === "42501") {
     throw new AppError(
       500,
       "DATABASE_RLS_ERROR",
-      `${rawMsg}. Ensure SUPABASE_SERVICE_ROLE_KEY is set to the secret service_role / sb_secret_ key (not the publishable/anon key).`
+      "Database permission error. Ensure SUPABASE_SERVICE_ROLE_KEY is set to the secret service_role / sb_secret_ key."
     );
   }
   if (
     rawMsg.includes("Could not find the table") ||
+    rawMsg.includes("Could not find the ") ||
+    rawMsg.includes("schema cache") ||
     rawMsg.includes("does not exist") ||
     error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "42883" ||
+    error?.code === "PGRST202" ||
+    error?.code === "PGRST204" ||
     error?.code === "PGRST205"
   ) {
     throw new AppError(
       500,
       "DATABASE_SCHEMA_ERROR",
-      `${rawMsg}. Run backend/supabase/migrations/001_admins.sql in the Supabase SQL Editor.`
+      "Database schema is out of sync with the application. Please run backend/supabase/migrations/002_upgrade.sql in the Supabase SQL Editor."
     );
   }
-  throw new AppError(500, "DATABASE_ERROR", rawMsg);
+  if (error?.code === "22P02") {
+    throw new AppError(400, "INVALID_ID", "Invalid identifier format.");
+  }
+  if (error?.code === "23505") {
+    throw new AppError(409, "CONFLICT", "A record with these details already exists.");
+  }
+  if (error?.code === "23503") {
+    throw new AppError(400, "FOREIGN_KEY_ERROR", "Referenced record was not found.");
+  }
+  if (error?.code === "23514") {
+    throw new AppError(400, "CHECK_CONSTRAINT_ERROR", "Provided values are outside the allowed range.");
+  }
+  throw new AppError(500, "DATABASE_ERROR", "A database error occurred. Please try again.");
 }
 
 // ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ export default function AdminDashboardPage() {
   // Delete Confirm Modal State
   const [deletingForm, setDeletingForm] = useState<FormInfo | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   // CSV Upload Modal State
   const [csvModalOpen, setCsvModalOpen] = useState(false);
@@ -214,24 +215,28 @@ export default function AdminDashboardPage() {
 
   async function handleToggleOpen(form: FormInfo) {
     const nextState = !form.is_open;
+    setDashboardError(null);
     setForms((prev) => prev.map((f) => (f.id === form.id ? { ...f, is_open: nextState } : f)));
     try {
       const { form: updated } = await updateAdminForm(form.id, { is_open: nextState });
       setForms((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-    } catch {
+    } catch (err: any) {
       setForms((prev) => prev.map((f) => (f.id === form.id ? { ...f, is_open: form.is_open } : f)));
+      setDashboardError(err?.message || "Failed to update form status.");
     }
   }
 
   async function handleConfirmDelete() {
     if (!deletingForm) return;
     setDeletingBusy(true);
+    setDashboardError(null);
     try {
       await deleteAdminForm(deletingForm.id);
       setForms((prev) => prev.filter((f) => f.id !== deletingForm.id));
       setDeletingForm(null);
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setDashboardError(err?.message || "Failed to delete form.");
+      setDeletingForm(null);
     } finally {
       setDeletingBusy(false);
     }
@@ -354,6 +359,22 @@ export default function AdminDashboardPage() {
 
       {/* Main Content */}
       <div className="mx-auto mt-8 max-w-6xl px-6">
+        {dashboardError && (
+          <div
+            role="alert"
+            className="mb-6 flex items-center justify-between rounded-2xl border border-rose-400/35 bg-rose-500/10 px-4 py-3 text-xs font-medium text-rose-200"
+          >
+            <span>{dashboardError}</span>
+            <button
+              type="button"
+              onClick={() => setDashboardError(null)}
+              className="text-white/60 hover:text-white"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Class Roster Summary Banner */}
         <motion.div
           initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}

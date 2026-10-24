@@ -33,9 +33,25 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-if (supabaseServiceRoleKey.startsWith("sb_publishable_")) {
+function isAnonOrPublishableKey(key: string): boolean {
+  if (key.startsWith("sb_publishable_")) return true;
+  const parts = key.split(".");
+  if (parts.length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+      if (payload?.role && payload.role !== "service_role") {
+        return true;
+      }
+    } catch {
+      // Not a standard JWT payload
+    }
+  }
+  return false;
+}
+
+if (isAnonOrPublishableKey(supabaseServiceRoleKey)) {
   console.warn(
-    "[Startup Warning] SUPABASE_SERVICE_ROLE_KEY starts with 'sb_publishable_' (which is a publishable/anon key, not a service_role secret key). " +
+    "[Startup Warning] SUPABASE_SERVICE_ROLE_KEY appears to be a publishable/anon key rather than the secret service_role key. " +
       "When Row Level Security (RLS) is enabled in Supabase, you must set SUPABASE_SERVICE_ROLE_KEY to your secret 'service_role' / 'sb_secret_' key."
   );
 }

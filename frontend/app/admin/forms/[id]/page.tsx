@@ -103,6 +103,12 @@ export default function AdminFormResponsesPage() {
           router.replace("/admin/login");
           return;
         }
+        if (syncFormControls) {
+          setActionAlert({
+            type: "error",
+            text: err?.message || "Failed to load form details.",
+          });
+        }
         setLoading(false);
       }
     },

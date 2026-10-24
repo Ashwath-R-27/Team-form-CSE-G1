@@ -34,16 +34,37 @@ export function errorHandler(err: any, _req: Request, res: Response, _next: Next
       message: firstIssue
         ? `${firstIssue.path.join(".") ? firstIssue.path.join(".") + ": " : ""}${firstIssue.message}`
         : "Invalid request payload",
-      issues: err.issues,
     });
     return;
   }
 
-  console.error("[Unhandled Error]", err);
+  if (err?.name === "MulterError") {
+    const message =
+      err.code === "LIMIT_FILE_SIZE"
+        ? "Uploaded file is too large (maximum 5MB)."
+        : "Invalid file upload. Please upload a valid CSV file.";
+    res.status(400).json({
+      error: "UPLOAD_ERROR",
+      code: "UPLOAD_ERROR",
+      message,
+    });
+    return;
+  }
+
+  if (err instanceof SyntaxError && ("body" in err || (err as any)?.type === "entity.parse.failed")) {
+    res.status(400).json({
+      error: "INVALID_JSON",
+      code: "INVALID_JSON",
+      message: "Invalid JSON in request body.",
+    });
+    return;
+  }
+
+  console.error("[Unhandled Error]", err?.message || err);
   res.status(500).json({
     error: "INTERNAL_SERVER_ERROR",
     code: "INTERNAL_SERVER_ERROR",
-    message: err?.message || "An unexpected server error occurred.",
+    message: "An unexpected server error occurred. Please try again.",
   });
 }
 

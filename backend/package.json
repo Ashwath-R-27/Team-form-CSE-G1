@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "seed:students": "tsx src/scripts/seedStudents.ts",
     "create-admin": "tsx src/scripts/createAdmin.ts",
+    "check-schema": "tsx scripts/check-schema.ts",
+    "smoke-test": "tsx scripts/smoke-test.ts",
     "migrate": "tsx scripts/migrate-local-db.ts",
     "migrate-local-db": "tsx scripts/migrate-local-db.ts",
     "migrate:local-db": "tsx scripts/migrate-local-db.ts"
