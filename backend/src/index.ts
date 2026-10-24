@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import cookieParser from "cookie-parser";
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
@@ -13,6 +12,9 @@ import { parseClassListCsv } from "./utils/csv";
 
 const app = express();
 
+// Trust first proxy (required on Render for rate-limiting and client IP resolution)
+app.set("trust proxy", 1);
+
 // Security headers
 app.use(
   helmet({
@@ -20,34 +22,29 @@ app.use(
   })
 );
 
-// CORS restricted to frontend origin (+ localhost dev variants)
-const allowedOrigins = Array.from(
-  new Set([
-    config.frontendOrigin,
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-  ])
-);
+// CORS restricted strictly to origin(s) in FRONTEND_ORIGIN (comma-separated, trailing slashes trimmed)
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    const normalizedOrigin = origin.trim().replace(/\/+$/, "");
+    if (config.frontendOrigins.includes(normalizedOrigin)) {
+      callback(null, true);
+    } else {
+      callback(new AppError(403, "CORS_NOT_ALLOWED", `Origin ${origin} not allowed by CORS`));
+    }
+  },
+  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Authorization", "Content-Type"],
+  optionsSuccessStatus: 204,
+};
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback(new AppError(403, "CORS_NOT_ALLOWED", `Origin ${origin} not allowed by CORS`));
-      }
-    },
-    credentials: true,
-  })
-);
+app.options("*", cors(corsOptions));
+app.use(cors(corsOptions));
 
 app.use(express.json({ limit: "2mb" }));
-app.use(cookieParser());
 
 // Request logger
 app.use((req, res, next) => {
@@ -60,14 +57,8 @@ app.use((req, res, next) => {
 });
 
 // Health endpoint
-app.get("/health", async (_req, res) => {
-  const classStats = await getClassStats().catch(() => ({ total: 0, boys: 0, girls: 0 }));
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    databaseMode: "supabase",
-    classStats,
-  });
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
 });
 
 // Routes
@@ -105,8 +96,9 @@ async function autoSeedIfEmpty() {
   }
 }
 
-app.listen(config.port, async () => {
+const port = Number(process.env.PORT) || config.port;
+app.listen(port, async () => {
   await autoSeedIfEmpty();
-  console.log(`Express backend listening on http://localhost:${config.port}`);
-  console.log(`Frontend Origin : ${config.frontendOrigin}`);
+  console.log(`Express backend listening on http://localhost:${port}`);
+  console.log(`Allowed Frontend Origin(s): ${config.frontendOrigins.join(", ")}`);
 });

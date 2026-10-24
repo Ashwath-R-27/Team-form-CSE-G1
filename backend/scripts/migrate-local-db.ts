@@ -120,11 +120,10 @@ export async function runMigration(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 1. Migrate Students (required by team_members.roll_no FK)
+  // 1. Migrate Students (required by team_members.roll_no FK, skip existing)
   // -------------------------------------------------------------------------
   const studentMap = new Map<string, StudentRow>();
 
-  // Load classlist.csv as fallback for any member roll_no missing from local-db students
   const csvCandidates = [
     path.resolve(__dirname, "../../classlist.csv"),
     path.resolve(__dirname, "../classlist.csv"),
@@ -163,19 +162,19 @@ export async function runMigration(): Promise<void> {
     }
   }
 
-  const studentsToUpsert = Array.from(studentMap.values());
-  if (studentsToUpsert.length > 0) {
+  const studentsToInsert = Array.from(studentMap.values());
+  if (studentsToInsert.length > 0) {
     const { error: stuErr } = await supabase
       .from("students")
-      .upsert(studentsToUpsert, { onConflict: "roll_no" });
+      .upsert(studentsToInsert, { onConflict: "roll_no", ignoreDuplicates: true });
     if (stuErr) {
-      throw new Error(`Failed to upsert students: ${stuErr.message}`);
+      throw new Error(`Failed to migrate students: ${stuErr.message}`);
     }
-    console.log(`Migrated ${studentsToUpsert.length} student(s).`);
+    console.log(`Processed ${studentsToInsert.length} student(s) (existing rows skipped).`);
   }
 
   // -------------------------------------------------------------------------
-  // 2. Migrate Admins
+  // 2. Migrate Admins (upsert by lowercase email, keeping existing bcrypt hash)
   // -------------------------------------------------------------------------
   const adminIdMap = new Map<string, string>();
   const { data: existingAdmins, error: fetchAdminsErr } = await supabase
@@ -188,11 +187,11 @@ export async function runMigration(): Promise<void> {
   const existingAdminByEmail = new Map<string, string>();
   const existingAdminIds = new Set<string>();
   for (const a of existingAdmins || []) {
-    existingAdminByEmail.set(String(a.email).toLowerCase(), a.id);
+    existingAdminByEmail.set(String(a.email).trim().toLowerCase(), a.id);
     existingAdminIds.add(a.id);
   }
 
-  let migratedAdminsCount = 0;
+  let upsertedAdminsCount = 0;
   for (const a of rawAdmins) {
     if (!a?.email || !a?.password_hash) continue;
     const email = String(a.email).trim().toLowerCase();
@@ -205,29 +204,28 @@ export async function runMigration(): Promise<void> {
       const { error: updErr } = await supabase
         .from("admins")
         .update({
+          email,
           password_hash: a.password_hash,
           role,
         })
         .eq("id", existingIdForEmail);
       if (updErr) {
-        throw new Error(`Failed to update admin "${email}": ${updErr.message}`);
+        throw new Error(`Failed to upsert admin "${email}": ${updErr.message}`);
       }
       adminIdMap.set(localId, existingIdForEmail);
       existingAdminIds.add(existingIdForEmail);
-      migratedAdminsCount++;
+      upsertedAdminsCount++;
     } else {
+      const targetId = existingAdminIds.has(localId) ? crypto.randomUUID() : localId;
       const { data: inserted, error: insErr } = await supabase
         .from("admins")
-        .upsert(
-          {
-            id: localId,
-            email,
-            password_hash: a.password_hash,
-            role,
-            created_at: createdAt,
-          },
-          { onConflict: "id" }
-        )
+        .insert({
+          id: targetId,
+          email,
+          password_hash: a.password_hash,
+          role,
+          created_at: createdAt,
+        })
         .select("id")
         .single();
       if (insErr) {
@@ -236,13 +234,13 @@ export async function runMigration(): Promise<void> {
       adminIdMap.set(localId, inserted.id);
       existingAdminByEmail.set(email, inserted.id);
       existingAdminIds.add(inserted.id);
-      migratedAdminsCount++;
+      upsertedAdminsCount++;
     }
   }
-  console.log(`Migrated ${migratedAdminsCount} admin(s).`);
+  console.log(`Upserted ${upsertedAdminsCount} admin(s) by lowercase email.`);
 
   // -------------------------------------------------------------------------
-  // 3. Migrate Forms
+  // 3. Migrate Forms (skip rows that already exist)
   // -------------------------------------------------------------------------
   const formIdMap = new Map<string, string>();
   const { data: existingForms, error: fetchFormsErr } = await supabase
@@ -253,15 +251,31 @@ export async function runMigration(): Promise<void> {
   }
 
   const existingFormBySlug = new Map<string, string>();
+  const existingFormIds = new Set<string>();
   for (const f of existingForms || []) {
-    existingFormBySlug.set(String(f.slug).toLowerCase(), f.id);
+    existingFormBySlug.set(String(f.slug).trim().toLowerCase(), f.id);
+    existingFormIds.add(f.id);
   }
 
-  let migratedFormsCount = 0;
+  let insertedFormsCount = 0;
+  let skippedFormsCount = 0;
   for (const f of rawForms) {
     if (!f?.slug || !f?.title) continue;
     const localId = f.id || crypto.randomUUID();
     const slug = String(f.slug).trim().toLowerCase();
+
+    const existingIdForSlug = existingFormBySlug.get(slug);
+    if (existingIdForSlug) {
+      formIdMap.set(localId, existingIdForSlug);
+      skippedFormsCount++;
+      continue;
+    }
+    if (existingFormIds.has(localId)) {
+      formIdMap.set(localId, localId);
+      skippedFormsCount++;
+      continue;
+    }
+
     const minSize =
       typeof f.min_team_size === "number"
         ? f.min_team_size
@@ -284,44 +298,42 @@ export async function runMigration(): Promise<void> {
       }
     }
 
-    const existingIdForSlug = existingFormBySlug.get(slug);
-    const targetFormId = existingIdForSlug || localId;
-
-    const { data: upsertedForm, error: formErr } = await supabase
+    const { data: insertedForm, error: formErr } = await supabase
       .from("forms")
-      .upsert(
-        {
-          id: targetFormId,
-          slug,
-          title: String(f.title).trim(),
-          description: f.description ?? null,
-          min_team_size: minSize,
-          max_team_size: maxSize,
-          collect_topic: Boolean(f.collect_topic ?? false),
-          allow_topic_repeat: Boolean(f.allow_topic_repeat ?? true),
-          is_open: Boolean(f.is_open ?? true),
-          created_by: createdBy,
-          created_at: f.created_at || new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      )
+      .insert({
+        id: localId,
+        slug,
+        title: String(f.title).trim(),
+        description: f.description ?? null,
+        min_team_size: minSize,
+        max_team_size: maxSize,
+        collect_topic: Boolean(f.collect_topic ?? false),
+        allow_topic_repeat: Boolean(f.allow_topic_repeat ?? true),
+        is_open: Boolean(f.is_open ?? true),
+        created_by: createdBy,
+        created_at: f.created_at || new Date().toISOString(),
+      })
       .select("id")
       .single();
 
     if (formErr) {
-      throw new Error(`Failed to migrate form "${slug}": ${formErr.message}`);
+      throw new Error(`Failed to insert form "${slug}": ${formErr.message}`);
     }
 
-    formIdMap.set(localId, upsertedForm.id);
-    existingFormBySlug.set(slug, upsertedForm.id);
-    migratedFormsCount++;
+    formIdMap.set(localId, insertedForm.id);
+    existingFormBySlug.set(slug, insertedForm.id);
+    existingFormIds.add(insertedForm.id);
+    insertedFormsCount++;
   }
-  console.log(`Migrated ${migratedFormsCount} form(s).`);
+  console.log(
+    `Forms: ${insertedFormsCount} inserted, ${skippedFormsCount} skipped (already existed).`
+  );
 
   // -------------------------------------------------------------------------
-  // 4. Migrate Topics (if present in local-db.json)
+  // 4. Migrate Topics (skip rows that already exist)
   // -------------------------------------------------------------------------
-  let migratedTopicsCount = 0;
+  let insertedTopicsCount = 0;
+  let skippedTopicsCount = 0;
   for (const t of rawTopics) {
     if (!t?.form_id || !t?.name) continue;
     const formId = formIdMap.get(t.form_id) || t.form_id;
@@ -339,28 +351,34 @@ export async function runMigration(): Promise<void> {
     const alreadyExists = (existingTopics || []).some(
       (et) => normalizeTopic(et.name)?.toLowerCase() === cleanedName.toLowerCase()
     );
-    if (!alreadyExists) {
-      const { error: topInsErr } = await supabase.from("topics").insert({
-        id: t.id || crypto.randomUUID(),
-        form_id: formId,
-        name: cleanedName,
-      });
-      if (topInsErr) {
-        throw new Error(`Failed to insert topic "${cleanedName}": ${topInsErr.message}`);
-      }
+    if (alreadyExists) {
+      skippedTopicsCount++;
+      continue;
     }
-    migratedTopicsCount++;
+
+    const { error: topInsErr } = await supabase.from("topics").insert({
+      id: t.id || crypto.randomUUID(),
+      form_id: formId,
+      name: cleanedName,
+    });
+    if (topInsErr) {
+      throw new Error(`Failed to insert topic "${cleanedName}": ${topInsErr.message}`);
+    }
+    insertedTopicsCount++;
   }
-  if (migratedTopicsCount > 0) {
-    console.log(`Migrated ${migratedTopicsCount} topic(s).`);
+  if (insertedTopicsCount > 0 || skippedTopicsCount > 0) {
+    console.log(
+      `Topics: ${insertedTopicsCount} inserted, ${skippedTopicsCount} skipped (already existed).`
+    );
   }
 
   // -------------------------------------------------------------------------
-  // 5. Migrate Teams
+  // 5. Migrate Teams (skip rows that already exist)
   // -------------------------------------------------------------------------
   const teamIdMap = new Map<string, string>();
   const teamFormMap = new Map<string, string>();
-  let migratedTeamsCount = 0;
+  let insertedTeamsCount = 0;
+  let skippedTeamsCount = 0;
 
   for (const t of rawTeams) {
     if (!t?.form_id || typeof t?.team_no !== "number") continue;
@@ -377,36 +395,54 @@ export async function runMigration(): Promise<void> {
       throw new Error(`Failed to check existing team #${t.team_no}: ${findTeamErr.message}`);
     }
 
-    const targetTeamId = existingTeam?.id || localTeamId;
-    const { data: upsertedTeam, error: teamErr } = await supabase
+    if (existingTeam) {
+      teamIdMap.set(localTeamId, existingTeam.id);
+      teamFormMap.set(existingTeam.id, formId);
+      skippedTeamsCount++;
+      continue;
+    }
+
+    const { data: insertedTeam, error: teamErr } = await supabase
       .from("teams")
-      .upsert(
-        {
-          id: targetTeamId,
-          form_id: formId,
-          team_no: t.team_no,
-          topic: normalizeTopic(t.topic),
-          submitted_at: t.submitted_at || new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      )
+      .insert({
+        id: localTeamId,
+        form_id: formId,
+        team_no: t.team_no,
+        topic: normalizeTopic(t.topic),
+        submitted_at: t.submitted_at || new Date().toISOString(),
+      })
       .select("id")
       .single();
 
     if (teamErr) {
-      throw new Error(`Failed to migrate team #${t.team_no}: ${teamErr.message}`);
+      throw new Error(`Failed to insert team #${t.team_no}: ${teamErr.message}`);
     }
 
-    teamIdMap.set(localTeamId, upsertedTeam.id);
-    teamFormMap.set(upsertedTeam.id, formId);
-    migratedTeamsCount++;
+    teamIdMap.set(localTeamId, insertedTeam.id);
+    teamFormMap.set(insertedTeam.id, formId);
+    insertedTeamsCount++;
   }
-  console.log(`Migrated ${migratedTeamsCount} team(s).`);
+  console.log(
+    `Teams: ${insertedTeamsCount} inserted, ${skippedTeamsCount} skipped (already existed).`
+  );
 
   // -------------------------------------------------------------------------
-  // 6. Migrate Team Members
+  // 6. Migrate Team Members (skip rows that already exist)
   // -------------------------------------------------------------------------
-  // Group members by team_id so positions are deterministic and sorted naturally
+  const { data: existingMembers, error: fetchMemErr } = await supabase
+    .from("team_members")
+    .select("id, form_id, roll_no");
+  if (fetchMemErr) {
+    throw new Error(`Failed to query team_members table: ${fetchMemErr.message}`);
+  }
+
+  const existingMemberKeys = new Set<string>();
+  const existingMemberIds = new Set<string>();
+  for (const em of existingMembers || []) {
+    existingMemberKeys.add(`${em.form_id}:${String(em.roll_no).trim().toUpperCase()}`);
+    existingMemberIds.add(em.id);
+  }
+
   const membersByTeam = new Map<
     string,
     { id: string; team_id: string; form_id: string; roll_no: string; position?: number }[]
@@ -434,7 +470,8 @@ export async function runMigration(): Promise<void> {
     }
   }
 
-  let migratedMembersCount = 0;
+  let insertedMembersCount = 0;
+  let skippedMembersCount = 0;
   for (const [, teamMembers] of membersByTeam.entries()) {
     teamMembers.sort((a, b) => {
       if (a.position !== undefined && b.position !== undefined && a.position !== b.position) {
@@ -443,25 +480,43 @@ export async function runMigration(): Promise<void> {
       return compareRollNumbers(a.roll_no, b.roll_no);
     });
 
-    const rows = teamMembers.map((m, idx) => ({
-      id: m.id,
-      team_id: m.team_id,
-      form_id: m.form_id,
-      roll_no: m.roll_no,
-      position: m.position ?? idx + 1,
-    }));
+    const rowsToInsert: {
+      id: string;
+      team_id: string;
+      form_id: string;
+      roll_no: string;
+      position: number;
+    }[] = [];
 
-    const { error: memErr } = await supabase
-      .from("team_members")
-      .upsert(rows, { onConflict: "form_id,roll_no" });
+    teamMembers.forEach((m, idx) => {
+      const key = `${m.form_id}:${m.roll_no}`;
+      if (existingMemberKeys.has(key) || existingMemberIds.has(m.id)) {
+        skippedMembersCount++;
+        return;
+      }
+      existingMemberKeys.add(key);
+      existingMemberIds.add(m.id);
+      rowsToInsert.push({
+        id: m.id,
+        team_id: m.team_id,
+        form_id: m.form_id,
+        roll_no: m.roll_no,
+        position: m.position ?? idx + 1,
+      });
+    });
 
-    if (memErr) {
-      throw new Error(`Failed to migrate team members: ${memErr.message}`);
+    if (rowsToInsert.length > 0) {
+      const { error: memErr } = await supabase.from("team_members").insert(rowsToInsert);
+      if (memErr) {
+        throw new Error(`Failed to insert team members: ${memErr.message}`);
+      }
+      insertedMembersCount += rowsToInsert.length;
     }
-    migratedMembersCount += rows.length;
   }
-  console.log(`Migrated ${migratedMembersCount} team member(s).`);
-  console.log("Migration completed successfully. (local-db.json was preserved.)");
+  console.log(
+    `Team members: ${insertedMembersCount} inserted, ${skippedMembersCount} skipped (already existed).`
+  );
+  console.log("Migration completed successfully. (local-db.json was not modified or deleted.)");
 }
 
 if (require.main === module) {
@@ -470,4 +525,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-

@@ -1,10 +1,15 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { config } from "../config";
-import { AdminRole, getAdminByEmail, getAdminById } from "../db/repository";
+import { AdminRole, getAdminById } from "../db/repository";
 import { AppError } from "./errorHandler";
 
-export interface AdminTokenPayload {
+export interface AdminJwtPayload {
+  id: string;
+  role: AdminRole;
+}
+
+export interface AuthenticatedAdmin {
   id: string;
   email: string;
   role: AdminRole;
@@ -14,36 +19,36 @@ export interface AdminTokenPayload {
 declare global {
   namespace Express {
     interface Request {
-      admin?: AdminTokenPayload;
+      admin?: AuthenticatedAdmin;
     }
   }
 }
 
 export async function requireAdmin(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
-    let token: string | undefined;
-
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.slice(7).trim();
-    } else if (req.cookies?.admin_token) {
-      token = req.cookies.admin_token;
+    if (!authHeader || !/^Bearer\s+/i.test(authHeader)) {
+      throw new AppError(401, "UNAUTHORIZED", "Missing or invalid Authorization header.");
     }
 
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
     if (!token) {
-      throw new AppError(401, "UNAUTHORIZED", "Admin authentication required.");
+      throw new AppError(401, "UNAUTHORIZED", "Missing authentication token.");
     }
 
-    const decoded = jwt.verify(token, config.jwtSecret) as AdminTokenPayload;
-    if (!decoded || (decoded.role !== "admin" && decoded.role !== "super_admin")) {
-      throw new AppError(403, "FORBIDDEN", "Invalid admin credentials.");
+    const decoded = jwt.verify(token, config.jwtSecret) as AdminJwtPayload;
+    if (
+      !decoded ||
+      typeof decoded !== "object" ||
+      typeof decoded.id !== "string" ||
+      !decoded.id ||
+      (decoded.role !== "admin" && decoded.role !== "super_admin")
+    ) {
+      throw new AppError(401, "UNAUTHORIZED", "Invalid authentication token.");
     }
 
-    // Verify admin still exists in DB and sync role
-    const dbAdmin = decoded.id
-      ? await getAdminById(decoded.id)
-      : await getAdminByEmail(decoded.email);
-
+    // Reload admin from Supabase so deleted admins immediately lose access and role stays in sync
+    const dbAdmin = await getAdminById(decoded.id);
     if (!dbAdmin) {
       throw new AppError(401, "UNAUTHORIZED", "Admin account no longer exists.");
     }
@@ -60,7 +65,7 @@ export async function requireAdmin(req: Request, _res: Response, next: NextFunct
       next(err);
       return;
     }
-    next(new AppError(401, "UNAUTHORIZED", "Invalid or expired admin token."));
+    next(new AppError(401, "UNAUTHORIZED", "Invalid or expired authentication token."));
   }
 }
 

@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
-import { AdminRole, upsertAdminFromCli } from "../db/repository";
+import { AdminRole, createAdmin } from "../db/repository";
+import { AppError } from "../middleware/errorHandler";
 
 function parseArgs(argv: string[]): { email?: string; password?: string; role: AdminRole } {
   let email: string | undefined;
@@ -54,17 +55,13 @@ async function main() {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const { admin, created } = await upsertAdminFromCli({
+  const admin = await createAdmin({
     email: trimmedEmail,
     passwordHash,
     role,
   });
 
-  console.log(
-    created
-      ? `✅ Created admin account:`
-      : `✅ Updated existing admin account:`
-  );
+  console.log(`✅ Created admin account:`);
   console.log(`   ID      : ${admin.id}`);
   console.log(`   Email   : ${admin.email}`);
   console.log(`   Role    : ${admin.role}`);
@@ -72,7 +69,10 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Failed to create admin:", err);
+  if (err instanceof AppError && err.code === "ADMIN_EXISTS") {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+  console.error("Failed to create admin:", err?.message || err);
   process.exit(1);
 });
-

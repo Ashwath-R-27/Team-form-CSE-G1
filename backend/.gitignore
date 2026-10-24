@@ -1,7 +1,12 @@
 venv/
+.venv/
 .env
+.env.*
+!.env.example
 __pycache__/
 .DS_Store
+dist/
 .data/
 local-db.json
+backend/local-db.json
 **/local-db.json

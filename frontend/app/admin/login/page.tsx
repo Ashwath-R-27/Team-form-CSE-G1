@@ -6,7 +6,13 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { Shield, Lock, Mail, ArrowLeft } from "lucide-react";
 import GlassInput from "@/app/components/GlassInput";
-import { adminLogin, fetchAdminMe } from "@/lib/api";
+import {
+  adminLogin,
+  ApiClientError,
+  clearAdminToken,
+  fetchAdminMe,
+  getAdminToken,
+} from "@/lib/api";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -19,11 +25,18 @@ export default function AdminLoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const token = getAdminToken();
+    if (!token) {
+      setCheckingSession(false);
+      return;
+    }
+
     fetchAdminMe()
       .then(() => {
         router.replace("/admin");
       })
       .catch(() => {
+        clearAdminToken();
         setCheckingSession(false);
       });
   }, [router]);
@@ -39,10 +52,31 @@ export default function AdminLoginPage() {
 
     setLoading(true);
     try {
-      await adminLogin(email.trim(), password);
+      await adminLogin(email.trim().toLowerCase(), password);
       router.push("/admin");
     } catch (err: any) {
-      setError(err?.message || "Invalid admin credentials.");
+      if (err instanceof ApiClientError) {
+        if (err.status === 401 || err.code === "INVALID_CREDENTIALS") {
+          setError(err.message || "Invalid email or password");
+        } else if (
+          err.code === "SERVER_WAKING_UP" ||
+          err.status === 502 ||
+          err.status === 503 ||
+          err.status === 504
+        ) {
+          setError("The server may be starting up, please retry in a few seconds");
+        } else if (err.code === "NETWORK_ERROR" || err.status === 0) {
+          setError(
+            "Network or CORS error: unable to reach the server. The server may be starting up, please retry in a few seconds"
+          );
+        } else {
+          setError(err.message || "Login failed. Please try again.");
+        }
+      } else {
+        setError(
+          "Network or CORS error: unable to reach the server. The server may be starting up, please retry in a few seconds"
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -149,4 +183,3 @@ export default function AdminLoginPage() {
     </div>
   );
 }
-

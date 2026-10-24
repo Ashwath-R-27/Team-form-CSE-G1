@@ -114,7 +114,27 @@ export const supabase: SupabaseClient = createClient(
 );
 
 function handleSupabaseError(error: any): never {
-  throw new AppError(500, "DATABASE_ERROR", error?.message || "Database operation failed");
+  const rawMsg: string = error?.message || "Database operation failed";
+  if (rawMsg.includes("row-level security policy") || error?.code === "42501") {
+    throw new AppError(
+      500,
+      "DATABASE_RLS_ERROR",
+      `${rawMsg}. Ensure SUPABASE_SERVICE_ROLE_KEY is set to the secret service_role / sb_secret_ key (not the publishable/anon key).`
+    );
+  }
+  if (
+    rawMsg.includes("Could not find the table") ||
+    rawMsg.includes("does not exist") ||
+    error?.code === "42P01" ||
+    error?.code === "PGRST205"
+  ) {
+    throw new AppError(
+      500,
+      "DATABASE_SCHEMA_ERROR",
+      `${rawMsg}. Run backend/supabase/migrations/001_admins.sql in the Supabase SQL Editor.`
+    );
+  }
+  throw new AppError(500, "DATABASE_ERROR", rawMsg);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +146,18 @@ export async function getAdminByEmail(rawEmail: string): Promise<AdminRecord | n
   const { data, error } = await supabase
     .from("admins")
     .select("*")
-    .ilike("email", email)
+    .eq("email", email)
     .maybeSingle();
   if (error) handleSupabaseError(error);
-  return (data as AdminRecord) || null;
+  if (data) return data as AdminRecord;
+
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from("admins")
+    .select("*")
+    .ilike("email", email)
+    .maybeSingle();
+  if (fallbackError) handleSupabaseError(fallbackError);
+  return (fallbackData as AdminRecord) || null;
 }
 
 export async function getAdminById(id: string): Promise<AdminRecord | null> {
@@ -181,41 +209,6 @@ export async function createAdmin(input: {
   }
 
   return data as AdminPublic;
-}
-
-export async function upsertAdminFromCli(input: {
-  email: string;
-  passwordHash: string;
-  role: AdminRole;
-}): Promise<{ admin: AdminPublic; created: boolean }> {
-  const email = input.email.trim().toLowerCase();
-
-  const existing = await getAdminByEmail(email);
-  if (existing) {
-    const { data, error } = await supabase
-      .from("admins")
-      .update({
-        password_hash: input.passwordHash,
-        role: input.role,
-      })
-      .eq("id", existing.id)
-      .select("id, email, role, created_at")
-      .single();
-    if (error) handleSupabaseError(error);
-    return { admin: data as AdminPublic, created: false };
-  }
-
-  const { data, error } = await supabase
-    .from("admins")
-    .insert({
-      email,
-      password_hash: input.passwordHash,
-      role: input.role,
-    })
-    .select("id, email, role, created_at")
-    .single();
-  if (error) handleSupabaseError(error);
-  return { admin: data as AdminPublic, created: true };
 }
 
 export async function updateAdminPassword(adminId: string, newPasswordHash: string): Promise<void> {

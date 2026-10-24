@@ -9,6 +9,7 @@
     "seed:students": "tsx src/scripts/seedStudents.ts",
     "create-admin": "tsx src/scripts/createAdmin.ts",
     "migrate": "tsx scripts/migrate-local-db.ts",
+    "migrate-local-db": "tsx scripts/migrate-local-db.ts",
     "migrate:local-db": "tsx scripts/migrate-local-db.ts"
   },
   "dependencies": {

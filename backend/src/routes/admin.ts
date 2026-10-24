@@ -53,7 +53,7 @@ const loginLimiter = rateLimit({
 });
 
 const loginSchema = z.object({
-  email: z.string().trim().email("Please enter a valid email address"),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email address"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -63,7 +63,7 @@ const changePasswordSchema = z.object({
 });
 
 const createAdminSchema = z.object({
-  email: z.string().trim().email("Please enter a valid email address"),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   role: z.enum(["admin", "super_admin"]).optional().default("admin"),
 });
@@ -131,40 +131,32 @@ const updateFormSchema = z.object({
 adminRouter.post("/login", loginLimiter, async (req, res, next) => {
   try {
     const { email, password } = loginSchema.parse(req.body);
+    const normalizedEmail = email.trim().toLowerCase();
 
-    const admin = await getAdminByEmail(email);
+    const admin = await getAdminByEmail(normalizedEmail);
     const passMatch = admin ? await bcrypt.compare(password, admin.password_hash) : false;
 
     if (!admin || !passMatch) {
-      throw new AppError(401, "INVALID_CREDENTIALS", "Invalid admin email or password.");
+      throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password");
     }
 
-    const payload = {
-      id: admin.id,
-      email: admin.email,
-      role: admin.role,
-    };
-
-    const token = jwt.sign(payload, config.jwtSecret, {
-      expiresIn: "7d",
-    });
-
-    res.cookie("admin_token", token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      path: "/",
-    });
+    const token = jwt.sign(
+      {
+        id: admin.id,
+        role: admin.role,
+      },
+      config.jwtSecret,
+      {
+        expiresIn: "7d",
+      }
+    );
 
     res.json({
-      ok: true,
       token,
       admin: {
         id: admin.id,
         email: admin.email,
         role: admin.role,
-        created_at: admin.created_at,
       },
     });
   } catch (err) {
@@ -172,11 +164,8 @@ adminRouter.post("/login", loginLimiter, async (req, res, next) => {
   }
 });
 
-// POST /api/admin/logout
-adminRouter.post("/logout", (_req, res) => {
-  res.clearCookie("admin_token", { path: "/" });
-  res.json({ ok: true });
-});
+// Apply requireAdmin middleware to every /api/admin route except /login
+adminRouter.use(requireAdmin);
 
 // GET /api/admin/me
 adminRouter.get("/me", requireAdmin, async (req, res, next) => {

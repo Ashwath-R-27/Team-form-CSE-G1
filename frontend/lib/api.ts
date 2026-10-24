@@ -1,20 +1,41 @@
 export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
-).replace(/\/+$/, "");
+)
+  .trim()
+  .replace(/\/+$/, "");
 
 const TOKEN_STORAGE_KEY = "team_reg_admin_token";
 
 export function getAdminToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
+  try {
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function setAdminToken(token: string | null): void {
   if (typeof window === "undefined") return;
-  if (token) {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  } else {
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  try {
+    if (token) {
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage errors (e.g., private browsing or disabled storage)
+  }
+}
+
+export function clearAdminToken(): void {
+  setAdminToken(null);
+}
+
+function handleUnauthorized(): void {
+  clearAdminToken();
+  if (typeof window !== "undefined" && window.location.pathname !== "/admin/login") {
+    window.location.replace("/admin/login");
   }
 }
 
@@ -131,7 +152,11 @@ async function apiFetch<T>(
   const { auth = false, headers, ...rest } = options;
   const reqHeaders = new Headers(headers || {});
 
-  if (!(rest.body instanceof FormData) && !reqHeaders.has("Content-Type")) {
+  if (
+    rest.body !== undefined &&
+    !(rest.body instanceof FormData) &&
+    !reqHeaders.has("Content-Type")
+  ) {
     reqHeaders.set("Content-Type", "application/json");
   }
 
@@ -142,11 +167,34 @@ async function apiFetch<T>(
     }
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...rest,
-    headers: reqHeaders,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      ...rest,
+      headers: reqHeaders,
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw err;
+    }
+    throw new ApiClientError(
+      0,
+      "NETWORK_ERROR",
+      "Network or CORS error: unable to reach the server. The server may be starting up, please retry in a few seconds"
+    );
+  }
+
+  if (res.status === 401 && auth) {
+    handleUnauthorized();
+  }
+
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    throw new ApiClientError(
+      res.status,
+      "SERVER_WAKING_UP",
+      "The server may be starting up, please retry in a few seconds"
+    );
+  }
 
   const data = await res.json().catch(() => null);
 
@@ -240,14 +288,13 @@ export async function submitTeamForForm(
 export async function adminLogin(
   email: string,
   password: string
-): Promise<{ ok: boolean; token: string; admin: AdminUser }> {
+): Promise<{ token: string; admin: AdminUser }> {
   const res = await apiFetch<{
-    ok: boolean;
     token: string;
     admin: AdminUser;
   }>("/api/admin/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
   });
   if (res.token) {
     setAdminToken(res.token);
@@ -256,11 +303,7 @@ export async function adminLogin(
 }
 
 export async function adminLogout(): Promise<void> {
-  try {
-    await apiFetch("/api/admin/logout", { method: "POST", auth: true });
-  } finally {
-    setAdminToken(null);
-  }
+  clearAdminToken();
 }
 
 export async function fetchAdminMe(): Promise<{
@@ -453,11 +496,24 @@ async function downloadAdminFile(urlPath: string, fallbackFilename: string): Pro
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(`${API_BASE_URL}${urlPath}`, {
-    method: "GET",
-    headers,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${urlPath}`, {
+      method: "GET",
+      headers,
+    });
+  } catch {
+    throw new ApiClientError(
+      0,
+      "NETWORK_ERROR",
+      "Network or CORS error: unable to reach the server. The server may be starting up, please retry in a few seconds"
+    );
+  }
+
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new ApiClientError(401, "UNAUTHORIZED", "Session expired. Please sign in again.");
+  }
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null);
