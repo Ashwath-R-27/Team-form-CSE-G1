@@ -1,3 +1,4 @@
+// Entry point that runs the full end-to-end smoke test suite (including show_chosen_topics & GET /api/forms/:slug/chosen-topics)
 import { runSmokeTest } from "../backend/scripts/smoke-test";
 
 runSmokeTest().catch((err) => {

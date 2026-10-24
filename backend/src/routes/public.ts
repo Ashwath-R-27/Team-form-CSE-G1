@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   checkRollForForm,
   checkTopicForForm,
+  getChosenTopicsBySlug,
   getFormBySlug,
   getFormStats,
   getFormTopics,
@@ -64,6 +65,7 @@ publicRouter.get("/forms/:slug", async (req, res, next) => {
       max_team_size: form.max_team_size,
       collect_topic: form.collect_topic,
       allow_topic_repeat: form.allow_topic_repeat,
+      show_chosen_topics: form.show_chosen_topics,
       is_open: form.is_open,
       hasTopicOptions: form.hasTopicOptions,
       topicsCount: form.topicsCount,
@@ -121,6 +123,18 @@ publicRouter.get("/forms/:slug/topics", async (req, res, next) => {
       allowTopicRepeat: form.allow_topic_repeat,
     });
     res.json({ topics });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/forms/:slug/chosen-topics -> [{ topic, teamNos: number[], count }]
+publicRouter.get("/forms/:slug/chosen-topics", async (req, res, next) => {
+  try {
+    const { slug } = slugParamSchema.parse(req.params);
+    const chosenTopics = await getChosenTopicsBySlug(slug);
+    res.setHeader("Cache-Control", "no-cache");
+    res.json(chosenTopics);
   } catch (err) {
     next(err);
   }

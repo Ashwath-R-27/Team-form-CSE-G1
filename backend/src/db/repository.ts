@@ -29,6 +29,7 @@ export interface FormRecord {
   max_team_size: number;
   collect_topic: boolean;
   allow_topic_repeat: boolean;
+  show_chosen_topics: boolean;
   is_open: boolean;
   created_by: string | null;
   created_at: string;
@@ -52,6 +53,12 @@ export interface TopicOptionWithStatus {
   name: string;
   taken: boolean;
   teamNo?: number;
+}
+
+export interface ChosenTopicSummary {
+  topic: string;
+  teamNos: number[];
+  count: number;
 }
 
 export interface TeamRecord {
@@ -337,6 +344,7 @@ async function enrichFormRecord(form: FormRecord): Promise<FormEnriched> {
   const count = topicsCount || 0;
   return {
     ...form,
+    show_chosen_topics: Boolean(form.show_chosen_topics),
     hasTopicOptions: count > 0,
     topicsCount: count,
     created_by_email: (creatorRes.data as any)?.email ?? null,
@@ -384,6 +392,7 @@ export async function createForm(input: {
   max_team_size: number;
   collect_topic?: boolean;
   allow_topic_repeat?: boolean;
+  show_chosen_topics?: boolean;
   is_open?: boolean;
   created_by?: string | null;
 }): Promise<FormEnriched> {
@@ -397,6 +406,9 @@ export async function createForm(input: {
     );
   }
 
+  const collectTopic = input.collect_topic ?? false;
+  const showChosenTopics = collectTopic ? (input.show_chosen_topics ?? false) : false;
+
   const { data, error } = await supabase
     .from("forms")
     .insert({
@@ -405,8 +417,9 @@ export async function createForm(input: {
       description: input.description?.trim() || null,
       min_team_size: input.min_team_size,
       max_team_size: input.max_team_size,
-      collect_topic: input.collect_topic ?? false,
+      collect_topic: collectTopic,
       allow_topic_repeat: input.allow_topic_repeat ?? true,
+      show_chosen_topics: showChosenTopics,
       is_open: input.is_open ?? true,
       created_by: input.created_by ?? null,
     })
@@ -433,6 +446,7 @@ export async function updateForm(
     max_team_size: number;
     collect_topic: boolean;
     allow_topic_repeat: boolean;
+    show_chosen_topics: boolean;
     is_open: boolean;
   }>
 ): Promise<FormEnriched> {
@@ -509,6 +523,11 @@ export async function updateForm(
   if (patch.max_team_size !== undefined) cleanPatch.max_team_size = patch.max_team_size;
   if (patch.collect_topic !== undefined) cleanPatch.collect_topic = patch.collect_topic;
   if (patch.allow_topic_repeat !== undefined) cleanPatch.allow_topic_repeat = patch.allow_topic_repeat;
+  if (patch.collect_topic === false) {
+    cleanPatch.show_chosen_topics = false;
+  } else if (patch.show_chosen_topics !== undefined) {
+    cleanPatch.show_chosen_topics = nextCollectTopic ? patch.show_chosen_topics : false;
+  }
   if (patch.is_open !== undefined) cleanPatch.is_open = patch.is_open;
 
   const { data, error } = await supabase
@@ -682,6 +701,58 @@ export async function checkTopicForForm(
   return { status: "available" };
 }
 
+export async function getChosenTopicsBySlug(slug: string): Promise<ChosenTopicSummary[]> {
+  const cleanSlug = slug.trim().toLowerCase();
+  const { data: form, error: formError } = await supabase
+    .from("forms")
+    .select("id, collect_topic, show_chosen_topics")
+    .eq("slug", cleanSlug)
+    .maybeSingle();
+
+  if (formError) handleSupabaseError(formError);
+  if (!form) {
+    throw new AppError(404, "FORM_NOT_FOUND", `Form "${slug}" was not found.`);
+  }
+
+  if (!form.collect_topic || !form.show_chosen_topics) {
+    return [];
+  }
+
+  const { data: rawTeamsData, error: teamsError } = await supabase
+    .from("teams")
+    .select("team_no, topic")
+    .eq("form_id", form.id)
+    .order("team_no", { ascending: true });
+
+  if (teamsError) handleSupabaseError(teamsError);
+
+  const rawTeams: { team_no: number; topic: string | null }[] = Array.isArray(rawTeamsData)
+    ? rawTeamsData
+    : [];
+
+  const sortedTeams = [...rawTeams].sort((a, b) => a.team_no - b.team_no);
+  const grouped = new Map<string, ChosenTopicSummary>();
+
+  for (const row of sortedTeams) {
+    const cleaned = normalizeTopic(row.topic);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        topic: cleaned,
+        teamNos: [row.team_no],
+        count: 1,
+      });
+    } else if (!existing.teamNos.includes(row.team_no)) {
+      existing.teamNos.push(row.team_no);
+      existing.count = existing.teamNos.length;
+    }
+  }
+
+  return Array.from(grouped.values());
+}
+
 // ---------------------------------------------------------------------------
 // Stats, Roll Check, Submissions & Responses
 // ---------------------------------------------------------------------------
@@ -850,6 +921,13 @@ export async function submitTeamAtomic(
       }
       finalTopic = matchedOption.name;
     } else {
+      if (cleaned.length > 120) {
+        throw new AppError(
+          400,
+          "TOPIC_TOO_LONG",
+          "Topic must be 120 characters or fewer."
+        );
+      }
       finalTopic = cleaned;
     }
 

@@ -6,9 +6,12 @@ import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { Lock, Users, AlertCircle, ArrowLeft } from "lucide-react";
 import LiveStatsCards from "@/app/components/LiveStatsCards";
+import ChosenTopicsSection from "@/app/components/ChosenTopicsSection";
 import TeamRegistrationForm from "@/app/components/TeamRegistrationForm";
 import {
   ApiClientError,
+  ChosenTopicItem,
+  fetchChosenTopics,
   fetchFormBySlug,
   fetchFormStats,
   formatTeamSizeLabel,
@@ -33,6 +36,12 @@ export default function PublicFormPage() {
 
   const [form, setForm] = useState<FormInfo | null>(null);
   const [stats, setStats] = useState<FormStats>(EMPTY_STATS);
+  const [chosenTopics, setChosenTopics] = useState<ChosenTopicItem[]>([]);
+  const [loadingChosenTopics, setLoadingChosenTopics] = useState(false);
+  const [pickedTopicRequest, setPickedTopicRequest] = useState<{
+    topic: string;
+    seq: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,8 +52,20 @@ export default function PublicFormPage() {
         fetchFormBySlug(slug),
         fetchFormStats(slug),
       ]);
+      const shouldShowChosen = Boolean(
+        latestForm.collect_topic && latestForm.show_chosen_topics
+      );
+      if (shouldShowChosen) {
+        const latestChosen = await fetchChosenTopics(slug).catch(() => null);
+        if (latestChosen !== null) {
+          setChosenTopics(latestChosen);
+        }
+      } else {
+        setChosenTopics([]);
+      }
       setForm(latestForm);
       setStats(latestStats);
+      setLoadingChosenTopics(false);
     } catch {
       // Ignore transient polling errors
     }
@@ -53,16 +74,25 @@ export default function PublicFormPage() {
   const loadForm = useCallback(async () => {
     if (!slug) return;
     setLoading(true);
+    setLoadingChosenTopics(false);
     setError(null);
     try {
       const data = await fetchFormBySlug(slug);
+      const shouldShowChosen = Boolean(data.collect_topic && data.show_chosen_topics);
+      const statsPromise = data.stats
+        ? Promise.resolve(data.stats)
+        : fetchFormStats(slug);
+      const chosenPromise = shouldShowChosen
+        ? fetchChosenTopics(slug).catch(() => [])
+        : Promise.resolve([]);
+
+      const [latestStats, initialChosen] = await Promise.all([
+        statsPromise,
+        chosenPromise,
+      ]);
       setForm(data);
-      if (data.stats) {
-        setStats(data.stats);
-      } else {
-        const latestStats = await fetchFormStats(slug);
-        setStats(latestStats);
-      }
+      setStats(latestStats);
+      setChosenTopics(initialChosen);
     } catch (err: any) {
       if (err instanceof ApiClientError && err.status === 404) {
         setError("This registration form does not exist or may have been removed.");
@@ -71,6 +101,7 @@ export default function PublicFormPage() {
       }
     } finally {
       setLoading(false);
+      setLoadingChosenTopics(false);
     }
   }, [slug]);
 
@@ -78,11 +109,27 @@ export default function PublicFormPage() {
     loadForm();
   }, [loadForm]);
 
-  // Poll live stats and form settings every 5 seconds
+  // Poll live stats, chosen topics, and form settings every 5 seconds (paused when tab is hidden)
   useEffect(() => {
     if (!slug || error) return;
-    const interval = setInterval(refreshLiveState, 5000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      refreshLiveState();
+    }, 5000);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refreshLiveState();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [slug, error, refreshLiveState]);
 
   const sizeLabel = form
@@ -193,6 +240,31 @@ export default function PublicFormPage() {
               <LiveStatsCards stats={stats} />
             </motion.div>
 
+            {/* Topics Chosen So Far Section (Directly below progress/stats and above form fields) */}
+            {form.collect_topic && form.show_chosen_topics && (
+              <motion.div
+                initial={prefersReducedMotion ? false : { opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.42, delay: 0.04 }}
+                className="w-full max-w-2xl rounded-[30px] border border-white/10 bg-slate-950/60 p-6 shadow-2xl backdrop-blur-xl"
+              >
+                <ChosenTopicsSection
+                  topics={chosenTopics}
+                  allowTopicRepeat={form.allow_topic_repeat}
+                  loading={loadingChosenTopics}
+                  onSelectTopic={
+                    form.allow_topic_repeat && form.is_open
+                      ? (topic) =>
+                          setPickedTopicRequest((prev) => ({
+                            topic,
+                            seq: (prev?.seq || 0) + 1,
+                          }))
+                      : undefined
+                  }
+                />
+              </motion.div>
+            )}
+
             {/* Form Card or Closed State */}
             <motion.div
               initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
@@ -239,6 +311,8 @@ export default function PublicFormPage() {
                   allowTopicRepeat={form.allow_topic_repeat}
                   hasTopicOptions={Boolean(form.hasTopicOptions)}
                   formTitle={form.title}
+                  chosenTopics={chosenTopics}
+                  pickedTopicRequest={pickedTopicRequest}
                   onSubmitted={refreshLiveState}
                 />
               )}

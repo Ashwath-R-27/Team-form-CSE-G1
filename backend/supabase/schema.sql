@@ -25,6 +25,7 @@ create table if not exists forms (
   max_team_size      int not null default 5 check (max_team_size between 1 and 20),
   collect_topic      boolean not null default false,
   allow_topic_repeat boolean not null default true,
+  show_chosen_topics boolean not null default false,
   is_open            boolean not null default true,
   created_by         uuid references admins(id) on delete set null,
   created_at         timestamptz not null default now(),

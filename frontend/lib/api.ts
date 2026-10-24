@@ -74,6 +74,7 @@ export interface FormInfo {
   max_team_size: number;
   collect_topic: boolean;
   allow_topic_repeat: boolean;
+  show_chosen_topics: boolean;
   is_open: boolean;
   hasTopicOptions?: boolean;
   topicsCount?: number;
@@ -89,6 +90,12 @@ export interface TopicOption {
   name: string;
   taken: boolean;
   teamNo?: number;
+}
+
+export interface ChosenTopicItem {
+  topic: string;
+  teamNos: number[];
+  count: number;
 }
 
 export interface CheckRollResponse {
@@ -251,6 +258,17 @@ export async function fetchPublicFormTopics(
   );
 }
 
+export async function fetchChosenTopics(
+  slug: string,
+  signal?: AbortSignal
+): Promise<ChosenTopicItem[]> {
+  const data = await apiFetch<ChosenTopicItem[] | { topics: ChosenTopicItem[] }>(
+    `/api/forms/${encodeURIComponent(slug)}/chosen-topics`,
+    { signal }
+  );
+  return Array.isArray(data) ? data : data?.topics || [];
+}
+
 export async function checkTopicForForm(
   slug: string,
   topic: string,
@@ -378,6 +396,7 @@ export async function createAdminForm(payload: {
   max_team_size: number;
   collect_topic?: boolean;
   allow_topic_repeat?: boolean;
+  show_chosen_topics?: boolean;
   is_open?: boolean;
 }): Promise<{ form: FormInfo }> {
   return apiFetch("/api/admin/forms", {
@@ -397,6 +416,7 @@ export async function updateAdminForm(
     max_team_size: number;
     collect_topic: boolean;
     allow_topic_repeat: boolean;
+    show_chosen_topics: boolean;
     is_open: boolean;
   }>
 ): Promise<{ form: FormInfo }> {

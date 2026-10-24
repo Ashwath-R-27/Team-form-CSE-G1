@@ -99,6 +99,7 @@ const createFormSchema = z
     max_team_size: z.coerce.number().int().min(1, "Max team size must be at least 1").max(20, "Max team size is 20"),
     collect_topic: z.boolean().optional().default(false),
     allow_topic_repeat: z.boolean().optional().default(true),
+    show_chosen_topics: z.boolean().optional().default(false),
     is_open: z.boolean().optional().default(true),
   })
   .refine((d) => d.min_team_size <= d.max_team_size, {
@@ -120,6 +121,7 @@ const updateFormSchema = z.object({
   max_team_size: z.coerce.number().int().min(1).max(20).optional(),
   collect_topic: z.boolean().optional(),
   allow_topic_repeat: z.boolean().optional(),
+  show_chosen_topics: z.boolean().optional(),
   is_open: z.boolean().optional(),
 });
 
@@ -298,6 +300,7 @@ adminRouter.post("/forms", requireAdmin, async (req, res, next) => {
       max_team_size: parsed.max_team_size,
       collect_topic: parsed.collect_topic,
       allow_topic_repeat: parsed.allow_topic_repeat,
+      show_chosen_topics: parsed.collect_topic ? parsed.show_chosen_topics : false,
       is_open: parsed.is_open,
       created_by: req.admin!.id,
     });

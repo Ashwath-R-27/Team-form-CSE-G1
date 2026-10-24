@@ -24,6 +24,7 @@ const REQUIRED_TABLES: Record<string, string[]> = {
     "max_team_size",
     "collect_topic",
     "allow_topic_repeat",
+    "show_chosen_topics",
     "is_open",
     "created_by",
     "created_at",
@@ -200,7 +201,7 @@ export async function runSchemaCheck(): Promise<void> {
 
   if (failed.length > 0) {
     console.error(
-      "Action Required: Run backend/supabase/migrations/002_upgrade.sql in the Supabase SQL Editor."
+      "Action Required: Run backend/supabase/migrations/002_upgrade.sql and backend/supabase/migrations/003_show_chosen_topics.sql in the Supabase SQL Editor."
     );
     process.exit(1);
   }

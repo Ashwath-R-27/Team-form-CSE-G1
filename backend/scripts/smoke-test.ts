@@ -161,6 +161,7 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
           max_team_size: 3,
           collect_topic: false,
           allow_topic_repeat: true,
+          show_chosen_topics: true, // should be forced to false when collect_topic is false
           is_open: true,
         }),
       });
@@ -171,7 +172,8 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
         Boolean(f?.id) &&
         f.min_team_size === 2 &&
         f.max_team_size === 3 &&
-        f.collect_topic === false;
+        f.collect_topic === false &&
+        f.show_chosen_topics === false;
 
       if (f?.id) {
         form1Id = f.id;
@@ -183,7 +185,7 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
         "Create Form 1 (min 2, max 3, topic off)",
         ok,
         ok
-          ? `Created slug='${form1Slug}' (min=${f.min_team_size}, max=${f.max_team_size}, collect_topic=${f.collect_topic})`
+          ? `Created slug='${form1Slug}' (min=${f.min_team_size}, max=${f.max_team_size}, collect_topic=${f.collect_topic}, show_chosen_topics=${f.show_chosen_topics})`
           : `Failed (${res.status}): ${body?.message || "Unexpected response"}`
       );
       if (!ok) throw new Error("Failed to create Form 1");
@@ -216,7 +218,8 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
         f.min_team_size === 2 &&
         f.max_team_size === 3 &&
         f.collect_topic === true &&
-        f.allow_topic_repeat === false;
+        f.allow_topic_repeat === false &&
+        f.show_chosen_topics === false;
 
       if (f?.id) {
         form2Id = f.id;
@@ -225,10 +228,10 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
       }
 
       logStep(
-        "Create Form 2 (topics on, repeat off)",
+        "Create Form 2 (topics on, repeat off, show_chosen_topics default off)",
         ok,
         ok
-          ? `Created slug='${form2Slug}' (collect_topic=${f.collect_topic}, allow_topic_repeat=${f.allow_topic_repeat})`
+          ? `Created slug='${form2Slug}' (collect_topic=${f.collect_topic}, allow_topic_repeat=${f.allow_topic_repeat}, show_chosen_topics=${f.show_chosen_topics})`
           : `Failed (${res.status}): ${body?.message || "Unexpected response"}`
       );
       if (!ok) throw new Error("Failed to create Form 2");
@@ -406,6 +409,218 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
         ok
           ? `teams=${stats.teams}, total=${stats.total}, boys=${stats.boys}, girls=${stats.girls}`
           : `Mismatch: got ${JSON.stringify(stats)}, expected teams=2, total=${expectedTotal}, boys=${expectedBoys}, girls=${expectedGirls}`
+      );
+    }
+
+    // 11. Check GET /api/forms/:slug/chosen-topics with show_chosen_topics OFF vs ON (no PII)
+    {
+      const resTopicOff = await fetch(
+        `${api}/api/forms/${encodeURIComponent(form1Slug)}/chosen-topics`
+      );
+      const bodyTopicOff: any = await resTopicOff.json().catch(() => null);
+
+      const resShowOff = await fetch(
+        `${api}/api/forms/${encodeURIComponent(form2Slug)}/chosen-topics`
+      );
+      const bodyShowOff: any = await resShowOff.json().catch(() => null);
+
+      const pubBeforeRes = await fetch(`${api}/api/forms/${encodeURIComponent(form2Slug)}`);
+      const pubBeforeBody: any = await pubBeforeRes.json().catch(() => null);
+
+      // Enable show_chosen_topics on Form 2
+      const patchOnRes = await fetch(`${api}/api/admin/forms/${encodeURIComponent(form2Id)}`, {
+        method: "PATCH",
+        headers: jsonHeaders(true),
+        body: JSON.stringify({ show_chosen_topics: true }),
+      });
+      const patchOnBody: any = await patchOnRes.json().catch(() => null);
+
+      const pubAfterRes = await fetch(`${api}/api/forms/${encodeURIComponent(form2Slug)}`);
+      const pubAfterBody: any = await pubAfterRes.json().catch(() => null);
+
+      const resShowOn = await fetch(
+        `${api}/api/forms/${encodeURIComponent(form2Slug)}/chosen-topics`
+      );
+      const bodyShowOn: any = await resShowOn.json().catch(() => null);
+      const rawJsonOn = JSON.stringify(bodyShowOn || []);
+
+      const registeredOnForm2 = [...team1Students, ...team2Students];
+      const leaksPii = registeredOnForm2.some(
+        (s) =>
+          rawJsonOn.includes(s.roll_no) ||
+          rawJsonOn.includes(s.name) ||
+          rawJsonOn.includes("roll_no") ||
+          rawJsonOn.includes("name") ||
+          rawJsonOn.includes("members")
+      );
+
+      // Turn show_chosen_topics back OFF and verify empty list
+      await fetch(`${api}/api/admin/forms/${encodeURIComponent(form2Id)}`, {
+        method: "PATCH",
+        headers: jsonHeaders(true),
+        body: JSON.stringify({ show_chosen_topics: false }),
+      });
+      const resShowOffAgain = await fetch(
+        `${api}/api/forms/${encodeURIComponent(form2Slug)}/chosen-topics`
+      );
+      const bodyShowOffAgain: any = await resShowOffAgain.json().catch(() => null);
+
+      const okOff =
+        resTopicOff.status === 200 &&
+        Array.isArray(bodyTopicOff) &&
+        bodyTopicOff.length === 0 &&
+        resShowOff.status === 200 &&
+        Array.isArray(bodyShowOff) &&
+        bodyShowOff.length === 0 &&
+        pubBeforeBody?.show_chosen_topics === false &&
+        resShowOffAgain.status === 200 &&
+        Array.isArray(bodyShowOffAgain) &&
+        bodyShowOffAgain.length === 0;
+
+      const okOn =
+        patchOnRes.status === 200 &&
+        patchOnBody?.form?.show_chosen_topics === true &&
+        pubAfterBody?.show_chosen_topics === true &&
+        resShowOn.status === 200 &&
+        Array.isArray(bodyShowOn) &&
+        bodyShowOn.length === 2 &&
+        bodyShowOn[0]?.topic === "Alpha Distributed Systems" &&
+        JSON.stringify(bodyShowOn[0]?.teamNos) === JSON.stringify([1]) &&
+        bodyShowOn[0]?.count === 1 &&
+        bodyShowOn[1]?.topic === "Beta Compiler Design" &&
+        JSON.stringify(bodyShowOn[1]?.teamNos) === JSON.stringify([2]) &&
+        bodyShowOn[1]?.count === 1 &&
+        !leaksPii;
+
+      const ok = okOff && okOn;
+      logStep(
+        "GET /api/forms/:slug/chosen-topics (show_chosen_topics OFF vs ON, CSV topics)",
+        ok,
+        ok
+          ? `show_chosen_topics OFF -> [], ON -> ${bodyShowOn.length} items, no roll numbers/names leaked`
+          : `Failed: topicOff=${JSON.stringify(bodyTopicOff)}, showOff=${JSON.stringify(bodyShowOff)}, on=${rawJsonOn}, leaksPii=${leaksPii}`
+      );
+    }
+
+    // 12. Free-text topic mode (no CSV): repeat OFF -> 409 on "smart  parking", repeat ON -> Teams 1, 2 · count 2, collect_topic OFF -> resets show_chosen_topics
+    {
+      const slug3 = `smoke-freetext-${runSuffix}`;
+      const createRes = await fetch(`${api}/api/admin/forms`, {
+        method: "POST",
+        headers: jsonHeaders(true),
+        body: JSON.stringify({
+          title: `Smoke Free Text Form (${runSuffix})`,
+          description: "Automated smoke test form (free-text topics)",
+          slug: slug3,
+          min_team_size: 2,
+          max_team_size: 3,
+          collect_topic: true,
+          allow_topic_repeat: false,
+          show_chosen_topics: true,
+          is_open: true,
+        }),
+      });
+      const createBody: any = await createRes.json().catch(() => null);
+      const form3Id = createBody?.form?.id;
+      if (form3Id) {
+        createdFormIds.push(form3Id);
+      }
+
+      // Submit Team 1 with "Smart Parking"
+      const sub1Res = await fetch(`${api}/api/forms/${encodeURIComponent(slug3)}/submit`, {
+        method: "POST",
+        headers: jsonHeaders(false),
+        body: JSON.stringify({
+          rolls: team1Students.map((s) => s.roll_no),
+          topic: "Smart Parking",
+        }),
+      });
+      const sub1Body: any = await sub1Res.json().catch(() => null);
+
+      // Check chosen-topics after Team 1
+      const chosen1Res = await fetch(
+        `${api}/api/forms/${encodeURIComponent(slug3)}/chosen-topics`
+      );
+      const chosen1Body: any = await chosen1Res.json().catch(() => null);
+
+      // Server rejection with 409 for "smart  parking" while repeat is OFF
+      const dupSubRes = await fetch(`${api}/api/forms/${encodeURIComponent(slug3)}/submit`, {
+        method: "POST",
+        headers: jsonHeaders(false),
+        body: JSON.stringify({
+          rolls: team2Students.map((s) => s.roll_no),
+          topic: "smart  parking",
+        }),
+      });
+      const dupSubBody: any = await dupSubRes.json().catch(() => null);
+
+      // Enable allow_topic_repeat and submit Team 2 with "smart  parking"
+      await fetch(`${api}/api/admin/forms/${encodeURIComponent(form3Id)}`, {
+        method: "PATCH",
+        headers: jsonHeaders(true),
+        body: JSON.stringify({ allow_topic_repeat: true }),
+      });
+
+      const sub2Res = await fetch(`${api}/api/forms/${encodeURIComponent(slug3)}/submit`, {
+        method: "POST",
+        headers: jsonHeaders(false),
+        body: JSON.stringify({
+          rolls: team2Students.map((s) => s.roll_no),
+          topic: "smart  parking",
+        }),
+      });
+      const sub2Body: any = await sub2Res.json().catch(() => null);
+
+      // Check chosen-topics groups case-insensitively with first-seen spelling and teamNos [1, 2]
+      const chosen2Res = await fetch(
+        `${api}/api/forms/${encodeURIComponent(slug3)}/chosen-topics`
+      );
+      const chosen2Body: any = await chosen2Res.json().catch(() => null);
+      const chosen2Raw = JSON.stringify(chosen2Body || []);
+      const leaksPii = [...team1Students, ...team2Students].some(
+        (s) => chosen2Raw.includes(s.roll_no) || chosen2Raw.includes(s.name)
+      );
+
+      // Turn collect_topic OFF and confirm show_chosen_topics resets to false and chosen-topics returns []
+      const turnOffCollectRes = await fetch(`${api}/api/admin/forms/${encodeURIComponent(form3Id)}`, {
+        method: "PATCH",
+        headers: jsonHeaders(true),
+        body: JSON.stringify({ collect_topic: false }),
+      });
+      const turnOffCollectBody: any = await turnOffCollectRes.json().catch(() => null);
+      const chosenAfterCollectOffRes = await fetch(
+        `${api}/api/forms/${encodeURIComponent(slug3)}/chosen-topics`
+      );
+      const chosenAfterCollectOffBody: any = await chosenAfterCollectOffRes.json().catch(() => null);
+
+      const ok =
+        createBody?.form?.show_chosen_topics === true &&
+        sub1Res.status === 201 &&
+        sub1Body?.teamNo === 1 &&
+        Array.isArray(chosen1Body) &&
+        chosen1Body.length === 1 &&
+        chosen1Body[0]?.topic === "Smart Parking" &&
+        dupSubRes.status === 409 &&
+        dupSubBody?.code === "TOPIC_TAKEN" &&
+        sub2Res.status === 201 &&
+        sub2Body?.teamNo === 2 &&
+        Array.isArray(chosen2Body) &&
+        chosen2Body.length === 1 &&
+        chosen2Body[0]?.topic === "Smart Parking" &&
+        JSON.stringify(chosen2Body[0]?.teamNos) === JSON.stringify([1, 2]) &&
+        chosen2Body[0]?.count === 2 &&
+        !leaksPii &&
+        turnOffCollectBody?.form?.collect_topic === false &&
+        turnOffCollectBody?.form?.show_chosen_topics === false &&
+        Array.isArray(chosenAfterCollectOffBody) &&
+        chosenAfterCollectOffBody.length === 0;
+
+      logStep(
+        "Free-text chosen-topics, repeat OFF/ON & collect_topic OFF reset",
+        ok,
+        ok
+          ? `Team 1 "Smart Parking" -> "smart  parking" 409 when repeat OFF -> accepted when repeat ON -> grouped as { topic: "Smart Parking", teamNos: [1, 2], count: 2 } -> collect_topic OFF resets show_chosen_topics=false & returns []`
+          : `Failed: sub1=${sub1Res.status}, dup=${dupSubRes.status}, sub2=${sub2Res.status}, chosen2=${chosen2Raw}, afterCollectOff=${JSON.stringify(turnOffCollectBody?.form)}`
       );
     }
 

@@ -62,6 +62,7 @@ export default function AdminDashboardPage() {
   const [maxTeamSize, setMaxTeamSize] = useState(5);
   const [collectTopic, setCollectTopic] = useState(false);
   const [allowTopicRepeat, setAllowTopicRepeat] = useState(true);
+  const [showChosenTopics, setShowChosenTopics] = useState(false);
   const [isOpen, setIsOpen] = useState(true);
   const [savingForm, setSavingForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -116,6 +117,7 @@ export default function AdminDashboardPage() {
     setMaxTeamSize(5);
     setCollectTopic(false);
     setAllowTopicRepeat(false);
+    setShowChosenTopics(false);
     setIsOpen(true);
     setFormError(null);
     setFormModalOpen(true);
@@ -131,6 +133,7 @@ export default function AdminDashboardPage() {
     setMaxTeamSize(form.max_team_size);
     setCollectTopic(form.collect_topic);
     setAllowTopicRepeat(form.allow_topic_repeat);
+    setShowChosenTopics(form.collect_topic ? Boolean(form.show_chosen_topics) : false);
     setIsOpen(form.is_open);
     setFormError(null);
     setFormModalOpen(true);
@@ -189,6 +192,7 @@ export default function AdminDashboardPage() {
           max_team_size: maxTeamSize,
           collect_topic: collectTopic,
           allow_topic_repeat: allowTopicRepeat,
+          show_chosen_topics: collectTopic ? showChosenTopics : false,
           is_open: isOpen,
         });
         setForms((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
@@ -201,6 +205,7 @@ export default function AdminDashboardPage() {
           max_team_size: maxTeamSize,
           collect_topic: collectTopic,
           allow_topic_repeat: allowTopicRepeat,
+          show_chosen_topics: collectTopic ? showChosenTopics : false,
           is_open: isOpen,
         });
         setForms((prev) => [created, ...prev]);
@@ -798,7 +803,15 @@ export default function AdminDashboardPage() {
                     type="button"
                     role="switch"
                     aria-checked={collectTopic}
-                    onClick={() => setCollectTopic((c) => !c)}
+                    onClick={() =>
+                      setCollectTopic((c) => {
+                        const next = !c;
+                        if (!next) {
+                          setShowChosenTopics(false);
+                        }
+                        return next;
+                      })
+                    }
                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
                       collectTopic ? "bg-[#5227FF]" : "bg-white/20"
                     }`}
@@ -842,6 +855,41 @@ export default function AdminDashboardPage() {
                     </button>
                   </div>
                 )}
+
+                {/* Show Chosen Topics Switch */}
+                <div className="flex items-center justify-between rounded-2xl border border-white/15 bg-white/[0.03] px-4 py-3">
+                  <div>
+                    <span className="block text-xs font-semibold text-white">
+                      Show chosen topics to users
+                    </span>
+                    <span className="text-[11px] text-white/50">
+                      {collectTopic && showChosenTopics
+                        ? "Students can see which topics teams have already chosen"
+                        : "Chosen topics are hidden from students"}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Show chosen topics to users"
+                    aria-checked={collectTopic && showChosenTopics}
+                    disabled={!collectTopic}
+                    onClick={() => {
+                      if (!collectTopic) return;
+                      setShowChosenTopics((s) => !s);
+                    }}
+                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                      collectTopic && showChosenTopics ? "bg-emerald-500" : "bg-white/20"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                        collectTopic && showChosenTopics ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
 
                 {/* Open/Closed Switch */}
                 <div className="flex items-center justify-between rounded-2xl border border-white/15 bg-white/[0.03] px-4 py-3">

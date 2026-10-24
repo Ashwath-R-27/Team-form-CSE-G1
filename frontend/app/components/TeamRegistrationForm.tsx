@@ -9,7 +9,7 @@ import SubmissionSuccess from "./SubmissionSuccess";
 import {
   ApiClientError,
   checkRollNumber,
-  checkTopicForForm,
+  ChosenTopicItem,
   fetchPublicFormTopics,
   StudentMember,
   submitTeamForForm,
@@ -34,6 +34,8 @@ interface TeamRegistrationFormProps {
   allowTopicRepeat?: boolean;
   hasTopicOptions?: boolean;
   formTitle?: string;
+  chosenTopics?: ChosenTopicItem[];
+  pickedTopicRequest?: { topic: string; seq: number } | null;
   onSubmitted?: () => void;
 }
 
@@ -51,6 +53,8 @@ export default function TeamRegistrationForm({
   allowTopicRepeat = true,
   hasTopicOptions = false,
   formTitle,
+  chosenTopics = [],
+  pickedTopicRequest = null,
   onSubmitted,
 }: TeamRegistrationFormProps) {
   const prefersReducedMotion = useReducedMotion();
@@ -64,7 +68,6 @@ export default function TeamRegistrationForm({
   const [loadingTopics, setLoadingTopics] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null);
   const [freeTopic, setFreeTopic] = useState("");
-  const [freeTopicStatus, setFreeTopicStatus] = useState<InputStatus>("idle");
   const [topicError, setTopicError] = useState<string | undefined>(undefined);
 
   const membersRef = useRef<MemberField[]>(members);
@@ -72,10 +75,13 @@ export default function TeamRegistrationForm({
     membersRef.current = members;
   }, [members]);
 
+  const freeTopicRef = useRef<string>(freeTopic);
+  useEffect(() => {
+    freeTopicRef.current = freeTopic;
+  }, [freeTopic]);
+
   const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const abortControllersRef = useRef<Record<string, AbortController>>({});
-  const topicTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const topicAbortRef = useRef<AbortController | null>(null);
 
   // Keep member count within [minTeamSize, maxTeamSize] if form settings change
   useEffect(() => {
@@ -121,30 +127,51 @@ export default function TeamRegistrationForm({
     if (collectTopic && hasTopicOptions) {
       setLoadingTopics(true);
       loadTopics().finally(() => setLoadingTopics(false));
-      const interval = setInterval(loadTopics, 5000);
+      const interval = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+        loadTopics();
+      }, 5000);
       return () => clearInterval(interval);
     } else {
       setTopicOptions([]);
       setSelectedTopic(null);
+      setLoadingTopics(false);
     }
   }, [collectTopic, hasTopicOptions, loadTopics]);
+
+  // Apply chip selection from "Topics chosen so far" when repeats are ON
+  useEffect(() => {
+    if (!pickedTopicRequest || !collectTopic || !allowTopicRepeat) return;
+    const cleaned = pickedTopicRequest.topic.trim().replace(/\s+/g, " ");
+    if (!cleaned) return;
+    if (hasTopicOptions && topicOptions.length > 0) {
+      const match = topicOptions.find(
+        (o) => o.name.trim().toLowerCase() === cleaned.toLowerCase()
+      );
+      if (match) {
+        setSelectedTopic(match.name);
+        setTopicError(undefined);
+        setSubmitError(null);
+      }
+    } else {
+      const capped = cleaned.slice(0, 120);
+      freeTopicRef.current = capped;
+      setFreeTopic(capped);
+      setTopicError(undefined);
+      setSubmitError(null);
+    }
+  }, [pickedTopicRequest, collectTopic, allowTopicRepeat, hasTopicOptions, topicOptions]);
 
   // Reset topic error if allowTopicRepeat turns on or collectTopic changes
   useEffect(() => {
     if (!collectTopic) {
       setTopicError(undefined);
+      freeTopicRef.current = "";
       setFreeTopic("");
-      setFreeTopicStatus("idle");
       setSelectedTopic(null);
     } else if (allowTopicRepeat) {
       setTopicError(undefined);
-      if (freeTopic.trim()) {
-        setFreeTopicStatus("valid");
-      }
-    } else if (!hasTopicOptions && freeTopic.trim()) {
-      validateFreeTopic(freeTopic);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectTopic, allowTopicRepeat, hasTopicOptions]);
 
   useEffect(() => {
@@ -153,8 +180,6 @@ export default function TeamRegistrationForm({
     return () => {
       Object.values(timers).forEach(clearTimeout);
       Object.values(controllers).forEach((c) => c.abort());
-      if (topicTimerRef.current) clearTimeout(topicTimerRef.current);
-      if (topicAbortRef.current) topicAbortRef.current.abort();
     };
   }, []);
 
@@ -347,77 +372,18 @@ export default function TeamRegistrationForm({
     }
   }
 
-  async function validateFreeTopic(rawTopicInput: string) {
-    const normalized = rawTopicInput.trim().replace(/\s+/g, " ");
-    if (!normalized) {
-      setFreeTopicStatus("idle");
-      setTopicError(undefined);
-      return;
-    }
-
-    if (allowTopicRepeat) {
-      setFreeTopicStatus("valid");
-      setTopicError(undefined);
-      return;
-    }
-
-    if (topicAbortRef.current) {
-      topicAbortRef.current.abort();
-    }
-    const controller = new AbortController();
-    topicAbortRef.current = controller;
-
-    setFreeTopicStatus("checking");
-    setTopicError(undefined);
-
-    try {
-      const res = await checkTopicForForm(slug, normalized, controller.signal);
-      if (res.status === "taken") {
-        setFreeTopicStatus("warning");
-        setTopicError(`Topic already chosen by Team ${res.teamNo ?? ""}`.trim());
-      } else {
-        setFreeTopicStatus("valid");
-        setTopicError(undefined);
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-      setFreeTopicStatus("invalid");
-      setTopicError(
-        err instanceof ApiClientError ? err.message : "Could not verify topic availability."
-      );
-    }
-  }
-
   function handleFreeTopicChange(val: string) {
+    freeTopicRef.current = val;
     setFreeTopic(val);
-    setSubmitError(null);
-    if (topicTimerRef.current) clearTimeout(topicTimerRef.current);
-
-    const normalized = val.trim().replace(/\s+/g, " ");
-    if (!normalized) {
-      setFreeTopicStatus("idle");
-      setTopicError(undefined);
-      return;
-    }
-
-    if (allowTopicRepeat) {
-      setFreeTopicStatus("valid");
-      setTopicError(undefined);
-      return;
-    }
-
-    setFreeTopicStatus("idle");
     setTopicError(undefined);
-    topicTimerRef.current = setTimeout(() => {
-      validateFreeTopic(val);
-    }, 400);
+    setSubmitError(null);
   }
 
   function handleFreeTopicBlur() {
-    if (!freeTopic.trim()) return;
-    if (topicTimerRef.current) clearTimeout(topicTimerRef.current);
-    if (freeTopicStatus === "idle") {
-      validateFreeTopic(freeTopic);
+    const cleaned = freeTopic.trim().replace(/\s+/g, " ").slice(0, 120);
+    if (cleaned !== freeTopic) {
+      freeTopicRef.current = cleaned;
+      setFreeTopic(cleaned);
     }
   }
 
@@ -426,19 +392,18 @@ export default function TeamRegistrationForm({
     members.length <= maxTeamSize &&
     members.every((m) => m.status === "valid" && !m.error && m.value.trim().length > 0);
 
+  const useDropdown = Boolean(hasTopicOptions && (loadingTopics || topicOptions.length > 0));
+  const normalizedFreeTopic = freeTopic.trim().replace(/\s+/g, " ");
+
   const isTopicValid = !collectTopic
     ? true
-    : hasTopicOptions
+    : useDropdown
     ? Boolean(
         selectedTopic &&
           !topicError &&
           (!topicOptions.find((t) => t.name === selectedTopic)?.taken || allowTopicRepeat)
       )
-    : Boolean(
-        freeTopic.trim().length > 0 &&
-          freeTopicStatus === "valid" &&
-          !topicError
-      );
+    : Boolean(normalizedFreeTopic.length > 0 && normalizedFreeTopic.length <= 120);
 
   const canSubmit = allMembersValid && isTopicValid && !submitting;
 
@@ -456,9 +421,9 @@ export default function TeamRegistrationForm({
 
     const topicValue = !collectTopic
       ? undefined
-      : hasTopicOptions
+      : useDropdown
       ? selectedTopic || ""
-      : freeTopic.trim().replace(/\s+/g, " ");
+      : normalizedFreeTopic.slice(0, 120);
 
     setSubmitting(true);
     try {
@@ -466,8 +431,8 @@ export default function TeamRegistrationForm({
       setResult(res);
       setMembers(createEmptyMembers(minTeamSize));
       setSelectedTopic(null);
+      freeTopicRef.current = "";
       setFreeTopic("");
-      setFreeTopicStatus("idle");
       setTopicError(undefined);
       onSubmitted?.();
     } catch (err: any) {
@@ -485,10 +450,8 @@ export default function TeamRegistrationForm({
           }
         } else if (err.code === "TOPIC_TAKEN") {
           const msg = `Topic already chosen by Team ${err.teamNo ?? ""}`.trim();
-          setTopicError(msg);
-          if (!hasTopicOptions) {
-            setFreeTopicStatus("warning");
-          } else {
+          if (useDropdown) {
+            setTopicError(msg);
             loadTopics();
           }
         }
@@ -512,7 +475,6 @@ export default function TeamRegistrationForm({
           setMembers(createEmptyMembers(minTeamSize));
           setSelectedTopic(null);
           setFreeTopic("");
-          setFreeTopicStatus("idle");
           setTopicError(undefined);
           if (collectTopic && hasTopicOptions) {
             loadTopics();
@@ -599,7 +561,7 @@ export default function TeamRegistrationForm({
           animate={{ opacity: 1, y: 0 }}
           className="pt-1"
         >
-          {hasTopicOptions ? (
+          {useDropdown ? (
             <GlassSelect
               label={
                 allowTopicRepeat
@@ -626,16 +588,9 @@ export default function TeamRegistrationForm({
                   : "Project / Seminar Topic (Unique per team)"
               }
               value={freeTopic}
-              status={freeTopicStatus}
-              error={topicError}
-              helperText={
-                freeTopicStatus === "valid" && !topicError
-                  ? allowTopicRepeat
-                    ? "Topic ready"
-                    : "Topic is available"
-                  : undefined
-              }
-              maxLength={180}
+              status="idle"
+              maxLength={120}
+              required
               onChange={(e) => handleFreeTopicChange(e.target.value)}
               onBlur={handleFreeTopicBlur}
               autoComplete="off"

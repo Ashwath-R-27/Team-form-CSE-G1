@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import LiveStatsCards from "@/app/components/LiveStatsCards";
+import ChosenTopicsSection from "@/app/components/ChosenTopicsSection";
 import TeamRegistrationForm from "@/app/components/TeamRegistrationForm";
-import { fetchFormStats, fetchPublicForms, FormInfo, FormStats } from "@/lib/api";
+import {
+  ChosenTopicItem,
+  fetchChosenTopics,
+  fetchFormStats,
+  fetchPublicForms,
+  FormInfo,
+  FormStats,
+} from "@/lib/api";
 
 const DEFAULT_STATS: FormStats = {
   boys: 0,
@@ -19,30 +27,63 @@ const DEFAULT_STATS: FormStats = {
 export default function FormPage() {
   const [form, setForm] = useState<FormInfo | null>(null);
   const [stats, setStats] = useState<FormStats>(DEFAULT_STATS);
+  const [chosenTopics, setChosenTopics] = useState<ChosenTopicItem[]>([]);
+  const [loadingChosenTopics, setLoadingChosenTopics] = useState(false);
+  const [pickedTopicRequest, setPickedTopicRequest] = useState<{
+    topic: string;
+    seq: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const refreshState = useCallback(
+    async (slug: string, collectTopic: boolean, showChosenTopics: boolean) => {
+      try {
+        const [latestStats, latestChosen] = await Promise.all([
+          fetchFormStats(slug),
+          collectTopic && showChosenTopics
+            ? fetchChosenTopics(slug).catch(() => null)
+            : Promise.resolve([]),
+        ]);
+        setStats(latestStats);
+        if (latestChosen !== null) {
+          setChosenTopics(latestChosen);
+        }
+        setLoadingChosenTopics(false);
+      } catch {
+        // Ignore transient errors
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     fetchPublicForms()
-      .then((res) => {
+      .then(async (res) => {
         const firstOpen = res.forms.find((f) => f.is_open) || res.forms[0] || null;
         setForm(firstOpen);
         if (firstOpen?.stats) {
           setStats(firstOpen.stats);
         }
+        if (firstOpen?.collect_topic && firstOpen?.show_chosen_topics) {
+          const initialChosen = await fetchChosenTopics(firstOpen.slug).catch(() => []);
+          setChosenTopics(initialChosen);
+        }
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLoadingChosenTopics(false);
+      });
   }, []);
 
   useEffect(() => {
     if (!form) return;
     const interval = setInterval(() => {
-      fetchFormStats(form.slug)
-        .then(setStats)
-        .catch(() => {});
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      refreshState(form.slug, form.collect_topic, Boolean(form.show_chosen_topics));
     }, 5000);
     return () => clearInterval(interval);
-  }, [form]);
+  }, [form, refreshState]);
 
   return (
     <div className="relative flex min-h-screen flex-col font-sans">
@@ -65,6 +106,25 @@ export default function FormPage() {
           <LiveStatsCards stats={stats} loading={loading} />
         </div>
 
+        {form?.collect_topic && form?.show_chosen_topics && (
+          <div className="w-full max-w-2xl rounded-[30px] border border-white/10 bg-slate-950/60 p-6 shadow-2xl backdrop-blur-xl">
+            <ChosenTopicsSection
+              topics={chosenTopics}
+              allowTopicRepeat={form.allow_topic_repeat}
+              loading={loadingChosenTopics}
+              onSelectTopic={
+                form.allow_topic_repeat && form.is_open
+                  ? (topic) =>
+                      setPickedTopicRequest((prev) => ({
+                        topic,
+                        seq: (prev?.seq || 0) + 1,
+                      }))
+                  : undefined
+              }
+            />
+          </div>
+        )}
+
         <div className="flex w-full max-w-2xl flex-col items-center justify-center rounded-[30px] border border-white/10 bg-slate-950/60 p-6 shadow-2xl backdrop-blur-xl">
           <span className="text-[17px] font-bold text-white md:text-xl">
             ENTER YOUR TEAM DETAILS
@@ -79,7 +139,15 @@ export default function FormPage() {
               allowTopicRepeat={form.allow_topic_repeat}
               hasTopicOptions={Boolean(form.hasTopicOptions)}
               formTitle={form.title}
-              onSubmitted={() => fetchFormStats(form.slug).then(setStats)}
+              chosenTopics={chosenTopics}
+              pickedTopicRequest={pickedTopicRequest}
+              onSubmitted={() =>
+                refreshState(
+                  form.slug,
+                  form.collect_topic,
+                  Boolean(form.show_chosen_topics)
+                )
+              }
             />
           ) : (
             <div className="py-6 text-center text-sm text-white/60">

@@ -162,6 +162,7 @@ export default function AdminFormResponsesPage() {
       max_team_size: number;
       collect_topic: boolean;
       allow_topic_repeat: boolean;
+      show_chosen_topics: boolean;
       is_open: boolean;
     }>,
     successMessage?: string
@@ -577,12 +578,15 @@ export default function AdminFormResponsesPage() {
                       aria-label="Collect topic"
                       aria-checked={form.collect_topic}
                       disabled={savingSettings}
-                      onClick={() =>
+                      onClick={() => {
+                        const nextCollect = !form.collect_topic;
                         applyFormPatch(
-                          { collect_topic: !form.collect_topic },
-                          `Topic collection turned ${!form.collect_topic ? "ON" : "OFF"}.`
-                        )
-                      }
+                          nextCollect
+                            ? { collect_topic: true }
+                            : { collect_topic: false, show_chosen_topics: false },
+                          `Topic collection turned ${nextCollect ? "ON" : "OFF"}.`
+                        );
+                      }}
                       className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
                         form.collect_topic ? "bg-[#5227FF]" : "bg-white/20"
                       }`}
@@ -627,6 +631,49 @@ export default function AdminFormResponsesPage() {
                       <span
                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
                           form.allow_topic_repeat ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Show Chosen Topics Toggle */}
+                  <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5">
+                    <div>
+                      <span className="block text-xs font-semibold text-white">
+                        Show chosen topics to users
+                      </span>
+                      <span className="text-[11px] text-white/50">
+                        {form.collect_topic && form.show_chosen_topics
+                          ? "Students can see which topics teams have already chosen"
+                          : "Chosen topics are hidden from students"}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-label="Show chosen topics to users"
+                      aria-checked={Boolean(form.collect_topic && form.show_chosen_topics)}
+                      disabled={!form.collect_topic || savingSettings}
+                      onClick={() => {
+                        if (!form.collect_topic) return;
+                        const nextShow = !form.show_chosen_topics;
+                        applyFormPatch(
+                          { show_chosen_topics: nextShow },
+                          `Show chosen topics turned ${nextShow ? "ON" : "OFF"}.`
+                        );
+                      }}
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                        form.collect_topic && form.show_chosen_topics
+                          ? "bg-emerald-500"
+                          : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                          form.collect_topic && form.show_chosen_topics
+                            ? "translate-x-6"
+                            : "translate-x-1"
                         }`}
                       />
                     </button>
