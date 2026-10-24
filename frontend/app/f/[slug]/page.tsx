@@ -299,7 +299,7 @@ export default function PublicFormPage() {
                   </div>
                   <h3 className="text-lg font-bold text-white">Registrations Are Closed</h3>
                   <p className="mt-1.5 max-w-md text-sm text-white/55">
-                    This form is currently not accepting new team submissions. Please contact your course instructor if you need assistance.
+                    This form is currently not accepting new team submissions. Please contact your representative if you need assistance.
                   </p>
                 </div>
               ) : (
