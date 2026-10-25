@@ -17,6 +17,7 @@ import {
   getAllStudents,
   getClassStats,
   getFormById,
+  getFormPendingStudents,
   getFormResponses,
   getFormStats,
   getFormTopics,
@@ -365,6 +366,18 @@ adminRouter.get("/forms/:id/responses", requireAdmin, async (req, res, next) => 
       responses,
       topics,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/forms/:id/pending
+adminRouter.get("/forms/:id/pending", requireAdmin, async (req, res, next) => {
+  try {
+    const formId = z.string().min(1).parse(req.params.id);
+    const pending = await getFormPendingStudents(formId);
+    res.setHeader("Cache-Control", "no-cache");
+    res.json(pending);
   } catch (err) {
     next(err);
   }

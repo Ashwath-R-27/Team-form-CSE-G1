@@ -22,16 +22,19 @@ import {
   X,
 } from "lucide-react";
 import LiveStatsCards from "@/app/components/LiveStatsCards";
+import PendingStudentsSection from "@/app/components/PendingStudentsSection";
 import {
   ApiClientError,
   deleteAdminFormTopic,
   deleteAdminTeam,
   downloadFormExcel,
   downloadFormPdf,
+  fetchAdminFormPending,
   fetchAdminFormResponses,
   formatTeamSizeLabel,
   FormInfo,
   FormStats,
+  PendingStudentsResponse,
   TeamResponseItem,
   TopicOption,
   updateAdminForm,
@@ -82,7 +85,34 @@ export default function AdminFormResponsesPage() {
   const [deletingTeam, setDeletingTeam] = useState<TeamResponseItem | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
 
+  // Tabs & Pending Students State
+  const [activeTab, setActiveTab] = useState<"responses" | "pending">("responses");
+  const [pendingData, setPendingData] = useState<PendingStudentsResponse | null>(null);
+  const [pendingLoading, setPendingLoading] = useState(true);
+  const [pendingRefreshing, setPendingRefreshing] = useState(false);
+
   const topicsFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const loadPending = useCallback(
+    async (showRefreshing = false) => {
+      if (!formId) return;
+      if (showRefreshing) setPendingRefreshing(true);
+      try {
+        const data = await fetchAdminFormPending(formId);
+        setPendingData(data);
+        setPendingLoading(false);
+      } catch (err: any) {
+        if (err instanceof ApiClientError && (err.status === 401 || err.status === 403)) {
+          router.replace("/admin/login");
+          return;
+        }
+        setPendingLoading(false);
+      } finally {
+        if (showRefreshing) setPendingRefreshing(false);
+      }
+    },
+    [formId, router]
+  );
 
   const loadData = useCallback(
     async (syncFormControls = false) => {
@@ -117,7 +147,8 @@ export default function AdminFormResponsesPage() {
 
   useEffect(() => {
     loadData(true);
-  }, [loadData]);
+    loadPending(false);
+  }, [loadData, loadPending]);
 
   // Poll every 5 seconds for live updates
   useEffect(() => {
@@ -125,6 +156,42 @@ export default function AdminFormResponsesPage() {
     const interval = setInterval(() => loadData(false), 5000);
     return () => clearInterval(interval);
   }, [loading, formId, loadData]);
+
+  // Keep pending list synced whenever registered count changes
+  useEffect(() => {
+    if (!loading && formId) {
+      loadPending(false);
+    }
+  }, [stats.total, loading, formId, loadPending]);
+
+  // Automatic refresh every 15 seconds while the "Not yet registered" tab is visible
+  useEffect(() => {
+    if (activeTab !== "pending" || !formId) return;
+    loadPending(false);
+
+    const interval = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        loadPending(false);
+        loadData(false);
+      }
+    }, 15000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadPending(false);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeTab, formId, loadPending, loadData]);
+
+  const handleRefreshPending = useCallback(async () => {
+    await Promise.all([loadPending(true), loadData(false)]);
+  }, [loadPending, loadData]);
 
   const filteredResponses = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -260,7 +327,7 @@ export default function AdminFormResponsesPage() {
           deletingTeam.topic ? " and topic" : ""
         }.`,
       });
-      await loadData(false);
+      await Promise.all([loadData(false), loadPending(false)]);
     } catch (err: any) {
       setActionAlert({ type: "error", text: err?.message || "Failed to delete team." });
     } finally {
@@ -777,168 +844,245 @@ export default function AdminFormResponsesPage() {
           </div>
         )}
 
-        {/* Responses Section */}
+        {/* Responses & Not Yet Registered Section */}
         <motion.div
           initial={prefersReducedMotion ? false : { opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.08 }}
           className="rounded-[30px] border border-white/10 bg-slate-950/65 p-6 shadow-2xl backdrop-blur-xl"
         >
-          {/* Toolbar: Search + Export Buttons */}
-          <div className="flex flex-col justify-between gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center">
-            <div className="relative flex-1 max-w-md">
-              <Search className="pointer-events-none absolute top-1/2 left-4 h-4 w-4 -translate-y-1/2 text-white/40" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by team #, roll number, name, or topic…"
-                aria-label="Search responses"
-                className="w-full rounded-2xl border border-white/15 bg-white/5 py-2.5 pr-4 pl-11 text-sm text-white placeholder-white/40 outline-none transition focus:border-[#FF9FFC]/60 focus:bg-white/10"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5">
+          {/* Section Tabs: Responses vs Not yet registered */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div
+              role="tablist"
+              aria-label="Form registration views"
+              className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 bg-white/[0.04] p-1"
+            >
               <button
                 type="button"
-                disabled={downloadingExcel || loading}
-                onClick={handleDownloadExcel}
-                className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-500/15 px-4 py-2.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                role="tab"
+                aria-selected={activeTab === "responses"}
+                onClick={() => setActiveTab("responses")}
+                className={`relative inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "responses"
+                    ? "bg-gradient-to-r from-[#5227FF] to-[#B15CFF] text-white shadow"
+                    : "text-white/65 hover:text-white"
+                }`}
               >
-                {downloadingExcel ? (
-                  <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
-                  </svg>
-                ) : (
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-300" />
-                )}
-                {downloadingExcel ? "Generating Excel…" : "Download Excel (.xlsx)"}
+                <span>Responses</span>
+                <span
+                  className={`rounded-lg px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums ${
+                    activeTab === "responses"
+                      ? "bg-white/20 text-white"
+                      : "bg-white/10 text-white/70"
+                  }`}
+                >
+                  {responses.length}
+                </span>
               </button>
 
               <button
                 type="button"
-                disabled={downloadingPdf || loading}
-                onClick={handleDownloadPdf}
-                className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[#5227FF] via-[#B15CFF] to-[#FF9FFC] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_6px_24px_-6px_rgba(177,92,255,0.65)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                role="tab"
+                aria-selected={activeTab === "pending"}
+                onClick={() => setActiveTab("pending")}
+                className={`relative inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                  activeTab === "pending"
+                    ? "bg-gradient-to-r from-[#5227FF] to-[#B15CFF] text-white shadow"
+                    : "text-white/65 hover:text-white"
+                }`}
               >
-                {downloadingPdf ? (
-                  <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
-                  </svg>
-                ) : (
-                  <FileText className="h-4 w-4" />
-                )}
-                {downloadingPdf ? "Generating PDF…" : "Download PDF"}
+                <span>Not yet registered</span>
+                <span
+                  className={`rounded-lg px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums ${
+                    activeTab === "pending"
+                      ? "bg-white/20 text-white"
+                      : "bg-white/10 text-white/70"
+                  }`}
+                >
+                  {pendingData
+                    ? pendingData.total
+                    : Math.max(0, (stats.classTotal || 0) - stats.total)}
+                </span>
               </button>
             </div>
+
+            {activeTab === "pending" && (
+              <span className="text-[11px] text-white/40">
+                Auto-refreshes every 15s while visible
+              </span>
+            )}
           </div>
 
-          {/* Table */}
-          {loading ? (
-            <div className="mt-6 space-y-3">
-              {[1, 2, 3].map((n) => (
-                <div key={n} className="h-16 w-full animate-pulse rounded-2xl bg-white/5" />
-              ))}
-            </div>
-          ) : filteredResponses.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-14 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white/40">
-                <Users className="h-6 w-6" />
-              </div>
-              <p className="text-sm font-semibold text-white/80">
-                {searchQuery
-                  ? "No teams match your search query"
-                  : "No teams have registered for this form yet"}
-              </p>
-              <p className="mt-1 text-xs text-white/45">
-                {searchQuery
-                  ? "Try searching by another roll number, student name, topic, or team number."
-                  : "Share the public form link with students to start collecting team registrations."}
-              </p>
-            </div>
+          {activeTab === "pending" ? (
+            <PendingStudentsSection
+              form={form}
+              stats={stats}
+              pendingData={pendingData}
+              loading={pendingLoading}
+              refreshing={pendingRefreshing}
+              onRefresh={handleRefreshPending}
+              onError={(msg) => setActionAlert({ type: "error", text: msg })}
+            />
           ) : (
-            <div className="mt-5 overflow-x-auto">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/50">
-                    <th className="py-3 pr-4 pl-3 w-24">Team No.</th>
-                    <th className="py-3 px-4">Members (Sorted by Roll No)</th>
-                    {form?.collect_topic && <th className="py-3 px-4 w-56">Topic</th>}
-                    <th className="py-3 px-4 w-40">Submitted Time</th>
-                    <th className="py-3 pr-3 pl-4 text-right w-24">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10 text-sm">
-                  {filteredResponses.map((team) => (
-                    <tr
-                      key={team.id}
-                      className="group transition-colors hover:bg-white/[0.03]"
-                    >
-                      <td className="py-4 pr-4 pl-3 align-top">
-                        <span className="inline-flex items-center justify-center rounded-xl border border-[#B15CFF]/35 bg-[#5227FF]/20 px-3 py-1 font-mono text-sm font-extrabold text-[#FF9FFC]">
-                          #{team.team_no}
-                        </span>
-                      </td>
+            <>
+              {/* Toolbar: Search + Export Buttons */}
+              <div className="flex flex-col justify-between gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="pointer-events-none absolute top-1/2 left-4 h-4 w-4 -translate-y-1/2 text-white/40" />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by team #, roll number, name, or topic…"
+                    aria-label="Search responses"
+                    className="w-full rounded-2xl border border-white/15 bg-white/5 py-2.5 pr-4 pl-11 text-sm text-white placeholder-white/40 outline-none transition focus:border-[#FF9FFC]/60 focus:bg-white/10"
+                  />
+                </div>
 
-                      <td className="py-4 px-4 align-top">
-                        <div className="flex flex-wrap gap-2">
-                          {team.members.map((m) => (
-                            <div
-                              key={m.roll_no}
-                              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5"
-                            >
-                              <span className="font-mono text-xs font-bold text-white">
-                                {m.roll_no}
-                              </span>
-                              <span className="text-xs text-white/75">{m.name}</span>
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
-                                  m.gender === "M"
-                                    ? "border-sky-400/35 bg-sky-500/15 text-sky-300"
-                                    : "border-pink-400/35 bg-pink-500/15 text-pink-300"
-                                }`}
-                              >
-                                {m.gender}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={downloadingExcel || loading}
+                    onClick={handleDownloadExcel}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-500/15 px-4 py-2.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {downloadingExcel ? (
+                      <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+                      </svg>
+                    ) : (
+                      <FileSpreadsheet className="h-4 w-4 text-emerald-300" />
+                    )}
+                    {downloadingExcel ? "Generating Excel…" : "Download Excel (.xlsx)"}
+                  </button>
 
-                      {form?.collect_topic && (
-                        <td className="py-4 px-4 align-top text-xs font-medium text-white/85">
-                          {team.topic || <span className="text-white/35">—</span>}
-                        </td>
-                      )}
+                  <button
+                    type="button"
+                    disabled={downloadingPdf || loading}
+                    onClick={handleDownloadPdf}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[#5227FF] via-[#B15CFF] to-[#FF9FFC] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_6px_24px_-6px_rgba(177,92,255,0.65)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {downloadingPdf ? (
+                      <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+                      </svg>
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    {downloadingPdf ? "Generating PDF…" : "Download PDF"}
+                  </button>
+                </div>
+              </div>
 
-                      <td className="py-4 px-4 align-top text-xs text-white/55">
-                        {new Date(team.submitted_at).toLocaleString("en-IN", {
-                          day: "2-digit",
-                          month: "short",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </td>
-
-                      <td className="py-4 pr-3 pl-4 align-top text-right">
-                        <button
-                          type="button"
-                          onClick={() => setDeletingTeam(team)}
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
-                          aria-label={`Delete Team #${team.team_no}`}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
+              {/* Table */}
+              {loading ? (
+                <div className="mt-6 space-y-3">
+                  {[1, 2, 3].map((n) => (
+                    <div key={n} className="h-16 w-full animate-pulse rounded-2xl bg-white/5" />
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </div>
+              ) : filteredResponses.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-14 text-center">
+                  <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white/40">
+                    <Users className="h-6 w-6" />
+                  </div>
+                  <p className="text-sm font-semibold text-white/80">
+                    {searchQuery
+                      ? "No teams match your search query"
+                      : "No teams have registered for this form yet"}
+                  </p>
+                  <p className="mt-1 text-xs text-white/45">
+                    {searchQuery
+                      ? "Try searching by another roll number, student name, topic, or team number."
+                      : "Share the public form link with students to start collecting team registrations."}
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-5 overflow-x-auto">
+                  <table className="w-full border-collapse text-left">
+                    <thead>
+                      <tr className="border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                        <th className="py-3 pr-4 pl-3 w-24">Team No.</th>
+                        <th className="py-3 px-4">Members (Sorted by Roll No)</th>
+                        {form?.collect_topic && <th className="py-3 px-4 w-56">Topic</th>}
+                        <th className="py-3 px-4 w-40">Submitted Time</th>
+                        <th className="py-3 pr-3 pl-4 text-right w-24">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10 text-sm">
+                      {filteredResponses.map((team) => (
+                        <tr
+                          key={team.id}
+                          className="group transition-colors hover:bg-white/[0.03]"
+                        >
+                          <td className="py-4 pr-4 pl-3 align-top">
+                            <span className="inline-flex items-center justify-center rounded-xl border border-[#B15CFF]/35 bg-[#5227FF]/20 px-3 py-1 font-mono text-sm font-extrabold text-[#FF9FFC]">
+                              #{team.team_no}
+                            </span>
+                          </td>
+
+                          <td className="py-4 px-4 align-top">
+                            <div className="flex flex-wrap gap-2">
+                              {team.members.map((m) => (
+                                <div
+                                  key={m.roll_no}
+                                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5"
+                                >
+                                  <span className="font-mono text-xs font-bold text-white">
+                                    {m.roll_no}
+                                  </span>
+                                  <span className="text-xs text-white/75">{m.name}</span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                                      m.gender === "M"
+                                        ? "border-sky-400/35 bg-sky-500/15 text-sky-300"
+                                        : "border-pink-400/35 bg-pink-500/15 text-pink-300"
+                                    }`}
+                                  >
+                                    {m.gender}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+
+                          {form?.collect_topic && (
+                            <td className="py-4 px-4 align-top text-xs font-medium text-white/85">
+                              {team.topic || <span className="text-white/35">—</span>}
+                            </td>
+                          )}
+
+                          <td className="py-4 px-4 align-top text-xs text-white/55">
+                            {new Date(team.submitted_at).toLocaleString("en-IN", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </td>
+
+                          <td className="py-4 pr-3 pl-4 align-top text-right">
+                            <button
+                              type="button"
+                              onClick={() => setDeletingTeam(team)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-400/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                              aria-label={`Delete Team #${team.team_no}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </motion.div>
       </div>

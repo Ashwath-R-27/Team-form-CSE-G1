@@ -103,6 +103,13 @@ export interface FormStats {
   classGirls: number;
 }
 
+export interface PendingStudentsResponse {
+  total: number;
+  boys: number;
+  girls: number;
+  students: StudentRow[];
+}
+
 if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
   throw new Error(
     "Missing required environment variables: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
@@ -1063,4 +1070,55 @@ export async function deleteTeamById(teamId: string): Promise<void> {
   if (!data) {
     throw new AppError(404, "TEAM_NOT_FOUND", "Team not found.");
   }
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function getFormPendingStudents(formId: string): Promise<PendingStudentsResponse> {
+  const cleanId = formId.trim();
+  if (!UUID_REGEX.test(cleanId)) {
+    throw new AppError(404, "FORM_NOT_FOUND", "Form not found.");
+  }
+
+  const [formRes, pendingRes] = await Promise.all([
+    supabase.from("forms").select("id").eq("id", cleanId).maybeSingle(),
+    supabase
+      .from("students")
+      .select("roll_no, name, gender, team_members!left(id)")
+      .eq("team_members.form_id", cleanId)
+      .is("team_members", null),
+  ]);
+
+  if (formRes.error) handleSupabaseError(formRes.error);
+  if (!formRes.data) {
+    throw new AppError(404, "FORM_NOT_FOUND", "Form not found.");
+  }
+  if (pendingRes.error) handleSupabaseError(pendingRes.error);
+
+  const students: StudentRow[] = ((pendingRes.data as any[]) || [])
+    .filter(
+      (row) =>
+        !row.team_members ||
+        (Array.isArray(row.team_members) && row.team_members.length === 0)
+    )
+    .map((row) => ({
+      roll_no: String(row.roll_no).trim().toUpperCase(),
+      name: String(row.name).trim(),
+      gender: (row.gender === "F" ? "F" : "M") as "M" | "F",
+    }))
+    .sort((a, b) => compareRollNumbers(a.roll_no, b.roll_no));
+
+  let boys = 0;
+  let girls = 0;
+  for (const s of students) {
+    if (s.gender === "M") boys++;
+    else if (s.gender === "F") girls++;
+  }
+
+  return {
+    total: students.length,
+    boys,
+    girls,
+    students,
+  };
 }

@@ -412,6 +412,96 @@ export async function runSmokeTest(argv: string[] = process.argv.slice(2)): Prom
       );
     }
 
+    // 10b. Check GET /api/admin/forms/:id/pending (auth 401, 404 unknown id, counts, per-form isolation, natural sorting)
+    {
+      const compareRolls = (a: string, b: string): number => {
+        const ra = a.trim().toUpperCase();
+        const rb = b.trim().toUpperCase();
+        if (ra.length !== rb.length) return ra.length - rb.length;
+        return ra < rb ? -1 : ra > rb ? 1 : 0;
+      };
+
+      // 1) Without token -> 401
+      const unauthRes = await fetch(
+        `${api}/api/admin/forms/${encodeURIComponent(form2Id)}/pending`
+      );
+      const unauthBody: any = await unauthRes.json().catch(() => null);
+      const okUnauth = unauthRes.status === 401 && Boolean(unauthBody?.error || unauthBody?.code);
+
+      // 2) Unknown form id -> 404 JSON
+      const notFoundRes = await fetch(
+        `${api}/api/admin/forms/00000000-0000-0000-0000-000000000000/pending`,
+        { headers: authHeaders() }
+      );
+      const notFoundBody: any = await notFoundRes.json().catch(() => null);
+      const okNotFound =
+        notFoundRes.status === 404 && Boolean(notFoundBody?.error || notFoundBody?.code);
+
+      // 3) Form 1 (0 teams registered) -> all class students pending
+      const f1Res = await fetch(
+        `${api}/api/admin/forms/${encodeURIComponent(form1Id)}/pending`,
+        { headers: authHeaders() }
+      );
+      const f1Body: any = await f1Res.json().catch(() => null);
+
+      // 4) Form 2 (2 teams = 5 students registered) -> total - 5 pending
+      const f2Res = await fetch(
+        `${api}/api/admin/forms/${encodeURIComponent(form2Id)}/pending`,
+        { headers: authHeaders() }
+      );
+      const f2Body: any = await f2Res.json().catch(() => null);
+
+      const registeredOnForm2 = [...team1Students, ...team2Students];
+      const registeredRollSet = new Set(registeredOnForm2.map((s) => s.roll_no.toUpperCase()));
+      const classBoys = students.filter((s) => s.gender === "M").length;
+      const classGirls = students.filter((s) => s.gender === "F").length;
+      const regBoys = registeredOnForm2.filter((s) => s.gender === "M").length;
+      const regGirls = registeredOnForm2.filter((s) => s.gender === "F").length;
+
+      const f2Students: { roll_no: string; name: string; gender: "M" | "F" }[] = Array.isArray(
+        f2Body?.students
+      )
+        ? f2Body.students
+        : [];
+
+      const isNaturallySorted = f2Students.every(
+        (s, idx) => idx === 0 || compareRolls(f2Students[idx - 1].roll_no, s.roll_no) <= 0
+      );
+      const excludesRegistered = f2Students.every(
+        (s) => !registeredRollSet.has(s.roll_no.toUpperCase())
+      );
+
+      const okCounts =
+        f1Res.status === 200 &&
+        f1Body?.total === students.length &&
+        f1Body?.boys === classBoys &&
+        f1Body?.girls === classGirls &&
+        f2Res.status === 200 &&
+        f2Body?.total === students.length - registeredOnForm2.length &&
+        f2Body?.boys === classBoys - regBoys &&
+        f2Body?.girls === classGirls - regGirls &&
+        f2Body?.boys + f2Body?.girls === f2Body?.total &&
+        f2Students.length === f2Body?.total;
+
+      const ok =
+        okUnauth && okNotFound && okCounts && isNaturallySorted && excludesRegistered;
+
+      logStep(
+        "GET /api/admin/forms/:id/pending (counts, sorting, 401/404, per-form isolation)",
+        ok,
+        ok
+          ? `Form1 pending=${f1Body.total}/${students.length}, Form2 pending=${f2Body.total} (boys=${f2Body.boys}, girls=${f2Body.girls}), natural sort verified, 401/404 verified`
+          : `Failed: unauth=${unauthRes.status}, notFound=${notFoundRes.status}, f1=${f1Body?.total}, f2=${JSON.stringify({
+              total: f2Body?.total,
+              boys: f2Body?.boys,
+              girls: f2Body?.girls,
+              len: f2Students.length,
+              sorted: isNaturallySorted,
+              excludesReg: excludesRegistered,
+            })}`
+      );
+    }
+
     // 11. Check GET /api/forms/:slug/chosen-topics with show_chosen_topics OFF vs ON (no PII)
     {
       const resTopicOff = await fetch(

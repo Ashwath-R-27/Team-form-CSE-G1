@@ -132,6 +132,13 @@ export interface ClassStats {
   girls: number;
 }
 
+export interface PendingStudentsResponse {
+  total: number;
+  boys: number;
+  girls: number;
+  students: StudentMember[];
+}
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -441,6 +448,14 @@ export async function fetchAdminFormResponses(id: string): Promise<{
   topics: TopicOption[];
 }> {
   return apiFetch(`/api/admin/forms/${encodeURIComponent(id)}/responses`, {
+    auth: true,
+  });
+}
+
+export async function fetchAdminFormPending(
+  id: string
+): Promise<PendingStudentsResponse> {
+  return apiFetch(`/api/admin/forms/${encodeURIComponent(id)}/pending`, {
     auth: true,
   });
 }
